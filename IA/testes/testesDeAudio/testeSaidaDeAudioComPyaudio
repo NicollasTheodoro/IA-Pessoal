@@ -1,0 +1,48 @@
+import pygame
+import requests
+from murf import Murf
+import os
+import sys
+
+# Puxa do Sistema Operacional
+api_key = os.getenv("MURF_API_KEY")
+
+if not api_key:
+    print("❌ ERRO: Variável de ambiente MURF_API_KEY não encontrada.")
+    sys.exit(1)
+
+# Inicializa cliente corretamente (melhor usar nomeado)
+client = Murf(api_key=api_key)
+
+response = client.text_to_speech.generate(
+    voice_id="pt-BR-Isadora",
+    text="""Ouviram do Ipiranga as margens plácidas
+De um povo heróico o brado retumbante...""",
+    multi_native_locale="pt-BR"
+)
+
+audio_url = response.audio_file
+
+# Verifica se realmente recebeu algo
+if not audio_url:
+    print("❌ ERRO: API não retornou arquivo de áudio.")
+    sys.exit(1)
+
+# Baixar
+r = requests.get(audio_url)
+
+if "audio" not in r.headers.get("Content-Type", ""):
+    print("❌ ERRO: Resposta não é áudio válido.")
+    print(r.text[:500])
+    sys.exit(1)
+
+with open("audio.wav", "wb") as f:
+    f.write(r.content)
+
+# Tocar
+pygame.mixer.init()
+pygame.mixer.music.load("audio.wav")
+pygame.mixer.music.play()
+
+while pygame.mixer.music.get_busy():
+    pygame.time.Clock().tick(10)  # evita travar CPU

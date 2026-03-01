@@ -1,0 +1,87 @@
+import requests
+import json
+
+# ============================================
+# CONFIGURAÇÃO
+# ============================================
+
+API_KEY = "ap2_45d8b09d-5baf-45de-b0ba-eca28b3bed28"
+BASE_URL = "https://api.murf.ai/v1/speech/generate"
+
+headers = {
+    "api-key": API_KEY,
+    "Content-Type": "application/json"
+}
+
+
+# ============================================
+# FUNÇÃO 1 - Gerar áudio e salvar em arquivo
+# ============================================
+
+def gerar_audio(texto, voz="pt-BR-Isadora", velocidade=1.0, arquivo_saida="saida2.mp3"):
+    payload = {
+        "voiceId": voz,
+        "text": texto,
+        "format": "mp3",
+        "speed": velocidade
+    }
+
+    response = requests.post(BASE_URL, headers=headers, data=json.dumps(payload))
+
+    if response.status_code == 200:
+        audio_data = response.content
+        with open(arquivo_saida, "wb") as f:
+            f.write(audio_data)
+        print(f"Áudio salvo em {arquivo_saida}")
+    else:
+        print("Erro:", response.text)
+
+
+# ============================================
+# FUNÇÃO 2 - Apenas retornar bytes (útil pra streaming)
+# ============================================
+
+def gerar_audio_bytes(texto, voz="pt-BR-Isadora"):
+    payload = {
+        "voiceId": voz,
+        "text": texto,
+        "format": "mp3"
+    }
+
+    response = requests.post(BASE_URL, headers=headers, data=json.dumps(payload))
+
+    if response.status_code == 200:
+        return response.content
+    else:
+        print("Erro:", response.text)
+        return None
+
+
+# ============================================
+# FUNÇÃO 3 - Listar vozes disponíveis
+# ============================================
+
+def listar_vozes():
+    url = "https://api.murf.ai/v1/speech/voices"
+    response = requests.get(url, headers=headers)
+
+    if response.status_code == 200:
+        vozes = response.json()
+        for voz in vozes:
+            print(f"{voz['voiceId']} - {voz['displayName']} ({voz['locale']})")
+    else:
+        print("Erro ao buscar vozes:", response.text)
+
+
+# ============================================
+# EXEMPLO DE USO
+# ============================================
+
+if __name__ == "__main__":
+    texto = "Olá! Eu sou sua Vtuber IA falando com a voz da Murf AI."
+
+    # Gerar e salvar arquivo
+    gerar_audio(texto, velocidade=1.1)
+
+    # Listar vozes disponíveis
+    # listar_vozes()

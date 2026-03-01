@@ -1,0 +1,141 @@
+Tudo bem, guarde as coisas que eu devo estudar. Serão elas:
+
+Classes e como eu devo usar isso na minha IA.
+
+3️⃣ Orientação a Objetos (muito importante agora)
+
+Você já está no ponto ideal para começar a usar classes.
+
+Por exemplo:
+
+🎭 Classe Persona
+class Persona:
+    def __init__(self, caminho_json):
+        ...
+    
+    def gerar_prompt(self):
+        ...
+🧠 Classe Brain
+class Brain:
+    def __init__(self, system_prompt):
+        ...
+    
+    def responder(self, mensagem):
+        ...
+'''🔊 Classe Voice
+class Voice:
+    def falar(self, texto):
+        ...
+'''
+
+...
+
+Async.
+
+Apesar de eu não saber o que é, dei uma pesquisada breve e me parece importante. Lembrando, isso será considerando o nível 1, onde estou.
+
+...
+
+Threads.
+
+Entendo isso como núcleos, talvez. Não sei como eu estudaria isso ou como colocaria em prática, mas talvez seja importante.
+
+...
+
+No nível 2, eu devo sim estudar sobre o áudio dela, e melhorar tanto a fala quanto a escuta. Você disse para eu estudar:
+
+Buffer de áudio
+
+Latência
+
+Threading em áudio
+
+
+...
+
+Irei seguir seu conselho e estudarei isso.
+
+...
+
+No nível 3, eu aprimoraria a personalidade dela. Algumas palavras chaves que você citou são:
+
+System vs user vs assistant | Few-shot examples | Controle de comportamento | Controle de personalidade dinâmica | Janela de contexto | Resumo automático | Vetores (embeddings) | RAG (Retrieval Augmented Generation)
+
+...
+
+Ela ter uma lore própria e consultar arquivos externos, são coisas citadas por você, e que são de fato tentadoras. E isso você afirmou que eu conseguiria caso aprendesse RAG.
+
+...
+
+Nível 4
+
+Você disse para eu estudar State Machines, o que provavelmente vai fazer com que ela fique feliz em situações e irritada em outras.
+
+Também sugeriu que eu estudasse Behavior Trees e Sistemas baseados em eventos, que pode auxiliar na mudança de personalidade e também na tomada de decisões com base em gatilhos.
+
+(O que estudar no nível 4: State Machines (Máquinas de Estado) | Behavior Trees | Sistemas baseados em eventos
+
+
+...
+
+Nível 5.
+
+Você não deu tantas informações, então eu deixarei para pesquisar e entender melhor no futuro. Você disse para eu estudar: Processamento de linguagem natural (NLP) | Embeddings | Fine-tuning | Reinforcement Learning básico.
+
+...
+
+E só no nível 6 que eu integraria esse sistema a uma IA e verdade.
+
+Colando exatamente o que você falou: Se for Vtuber real (Live2D, VRoid, etc.), você precisa estudar:
+
+WebSockets | OSC protocol | Integração com OBS | Captura de expressões faciais | Lip sync baseado em áudio RMS
+
+
+...
+
+E é tudo isso que irei estudar para criar minha IA.
+
+
+...
+Essa é a estrutura sugerida pelo chatgpt:
+
+vtuber_ai/
+│
+├── app.py              # ponto de entrada
+│
+├── core/               # núcleo da aplicação
+│   ├── controller.py   # orquestra tudo
+│   ├── config.py       # configs globais
+│
+├── audio/
+│   ├── listener.py     # ouvir microfone
+│   ├── speaker.py      # TTS
+│
+├── brain/
+│   ├── personality.py  # personalidade
+│   ├── actions.py      # decisões | to usando como Brain até então
+│   ├── memory.py       # memória (futuro nível 3)
+│
+├── avatar/
+│   ├── expressions.py  # controle emocional
+│   ├── websocket.py    # comunicação com modelo
+│
+└── utils/
+    ├── logger.py
+
+...
+
+
+Estratégia:
+
+🧠 Penny v1.0 → Script funcional
+
+🧠 Penny v2.0 → Orientada a Objetos
+
+🧠 Penny v3.0 → Memória
+
+🧠 Penny v4.0 → Emoções
+
+🧠 Penny v5.0 → Lore + RAG
+
+🧠 Penny v6.0 → Avatar real

@@ -1,0 +1,1 @@
+# Nota da personalidade da Alice: ELA VAI FALAR MUITO RECEBA, NÃO SOBRA NADA PRO BETA, BRUTAL, Chique Chique BAHIA
