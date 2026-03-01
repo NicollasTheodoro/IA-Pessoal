@@ -9,42 +9,59 @@ speak = Speak()
 mic = Listener()
 brain = Think(Personality())
 
+ativa = False
+ultimo_uso = 0
+tempo_timeout = 45
+
 case = input("deseja conversar por texto ou fala? (t/f)")
 
 if "f" in case.lower():
     while True:
         pergunta = mic.ouvir_som()
 
-        print("Áudio gravado!")
-        print("Gerando resposta!!!")
-
-        start = time.time()
-        resposta = brain.generate(pergunta)
-        print("LLM demorou:", time.time() - start)
-
-        # if "faça" in resposta or "abra" in resposta or "abre" in resposta:
-        #     resposta["tipo"] = resposta["acao"]
-        
-        if not resposta:
-            print("Sem resposta válida")
+        if not pergunta:
             continue
-            
-        if  resposta["acao"] == "abrir_youtube":
-            speak.falar(resposta["resposta"])
-            brain.comandos(resposta)
 
-        if  resposta["acao"] == "abrir_navegador":
-            speak.falar(resposta["resposta"])
-            brain.comandos(resposta)
+        if pergunta and pergunta.lower().startswith("alice"):
+            ativa = True
+            ultimo_uso = time.time()
+            pergunta = pergunta.replace("alice", "", 1).strip()
+            print("Áudio gravado!")
+            print("Gerando resposta!!!")
+
+        if not pergunta:
+            continue
+
+        if ativa:
+            if time.time() - ultimo_uso > tempo_timeout:
+                ativa = False
+                print("Modo passivo")
+                continue
+
+            ultimo_uso = time.time()
+
+            start = time.time()
+
+            resposta = brain.generate(pergunta)
+            print("LLM demorou:", time.time() - start)
+
+            # if "faça" in resposta or "abra" in resposta or "abre" in resposta:
+            #     resposta["tipo"] = resposta["acao"]
             
-        if  resposta["acao"] == "abrir_projeto":
-            speak.falar(resposta["resposta"])
-            brain.comandos(resposta)
-        
-        elif resposta["tipo"] == "fala":
-             start = time.time()
-             speak.falar(resposta["resposta"])
-             print("Murf demorou:", time.time() - start)
+            if not resposta:
+                print("Sem resposta válida")
+                continue
+                
+            if resposta["tipo"] == "acao":
+                if not resposta.get("resposta"):
+                    resposta["resposta"] = "Claro!"
+                speak.falar(resposta["resposta"])
+                brain.comandos(resposta)
+            
+            elif resposta["tipo"] == "fala":
+                start = time.time()
+                speak.falar(resposta["resposta"])
+                print("Murf demorou:", time.time() - start)
 
         # print(resposta)
         # brain.comandos(pergunta)  # ⚠️ IMPORTANTE (explico abaixo)
@@ -59,12 +76,23 @@ if "y" in case:
         pergunta = input("Entre com a pergunta")
         resposta = brain.generate(pergunta)
 
+        resposta["resposta"] = "abrindo"
+
         if not resposta:
             print("Sem resposta válida")
             continue
         
-        if resposta["tipo"] == "acao":
-             brain.comandos(resposta["acao"])
+        if  resposta["acao"] == "abrir_youtube":
+            speak.falar(resposta["resposta"])
+            brain.comandos(resposta)
+
+        if  resposta["acao"] == "abrir_navegador":
+            speak.falar(resposta["resposta"])
+            brain.comandos(resposta)
+            
+        if  resposta["acao"] == "abrir_projeto":
+            speak.falar(resposta["resposta"])
+            brain.comandos(resposta)
         
         elif resposta["tipo"] == "fala":
              speak.falar(resposta["resposta"])

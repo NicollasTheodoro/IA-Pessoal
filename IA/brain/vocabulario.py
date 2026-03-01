@@ -46,3 +46,33 @@ badWords = {
         "você é idiota",
         "você é um desastre"
     }
+
+slangs = {
+    "RECEBA": {
+        "emotion": "excited",
+        # "intensity": 8,
+        # "style": "celebration"
+    },
+    "NÃO SOBRA NADA PRO BETA": {
+        "emotion": "excited",
+        # "intensity": 7,
+        # "style": "dominance"
+    },
+    "BRUTAL": {
+        "emotion": "excited",
+        # "intensity": 6,
+        # "style": "impressed"
+    },
+    "Chique Chique BAHIA": {
+        "emotion": "excited",
+        # "intensity": 5,
+        # "style": "random_humor"
+    },
+    "Cabeça de pika": {
+        "emotion": "irritated",
+        # "intensity": 5,
+        # "style": "random_humor"
+    }
+}
+
+# intensidade e style ficarão para atts futuras.
