@@ -30,15 +30,11 @@ if "f" in case.lower():
             continue
             
         if  resposta["acao"] == "abrir_youtube":
-            speak.falar(resposta["resposta"])
+            speak.falar("Claro, abrindo!")
             brain.comandos(resposta)
 
         if  resposta["acao"] == "abrir_navegador":
-            speak.falar(resposta["resposta"])
-            brain.comandos(resposta)
-            
-        if  resposta["acao"] == "abrir_projeto":
-            speak.falar(resposta["resposta"])
+            speak.falar("Claro, abrindo!")
             brain.comandos(resposta)
         
         elif resposta["tipo"] == "fala":

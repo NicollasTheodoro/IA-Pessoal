@@ -4,6 +4,8 @@ import time
 import json
 import os
 import re
+from brain.prompt_builder import build_system_prompt
+
 
 api_key = os.getenv("MURF_API_KEY")
 
@@ -13,25 +15,7 @@ class Think:
         self.personalidade = personalidade
         self.history = []
         self.model='qwen2.5:7b'
-        self.messages=[
-            {'role': 'system', 'content': """
-            Você é Alice, uma assistente virtual com personalidade viva.
-            Nunca use emojis
-
-            Sempre responda em JSON no formato:
-
-            {
-            "tipo": "fala" ou "acao",
-            "acao": "nome_da_acao" ou null,
-            "resposta": "texto que deve ser falado"
-            }
-             
-            As ações possíveis são:
-            - abrir_navegador
-            - abrir_youtube
-             """
-             }
-        ]   
+        self.messages = []
     
     
 
@@ -44,6 +28,11 @@ class Think:
             return None
     
         self.history.append(user_input)
+        self.personalidade.update_from_interaction(user_input)
+
+        system_prompt = build_system_prompt(self.personalidade)
+        self.messages = [msg for msg in self.messages if msg["role"] != "system"]
+        self.messages.insert(0, {"role": "system", "content": system_prompt})
         # resposta = self.personalidade.generate(user_input) | Deixando de lado momentâneamente para testes.
         self.messages.append({'role': 'user', 'content': user_input})
 
@@ -86,22 +75,28 @@ class Think:
         py.press("enter")
 
 
-    def comandos(self, user_input):
-        if not user_input:
-            print("Input vazio em comandos()")
+    def comandos(self, dados):
+        if not isinstance(dados, dict):
             return
-        
-        user_input = user_input.lower()
-        print("DEBUG:", user_input)
 
-        if "abra o navegador" in user_input or "abre o navegador" in user_input:
+        if dados.get("tipo") != "acao":
+            return
+
+        acao = dados.get("acao")
+
+        if acao == "abrir_navegador":
             self.abrir_programa("Opera")
 
-        elif "abra o youtube" in user_input or "abre o youtube" in user_input:
+        elif acao == "abrir_youtube":
             self.abrir_programa("Opera")
             time.sleep(2)
             py.write("https://www.youtube.com", interval=0.05)
             py.press("enter")
+
+        elif acao == "abrir_projeto":
+            caminho_projeto = r"D:\Aulas\Git\AulaCursoEmVideo\clonando-projeto-site\IA-Pessoal"
+            os.startfile(caminho_projeto)
+
     
 
 
