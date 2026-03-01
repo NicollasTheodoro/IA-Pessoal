@@ -25,6 +25,11 @@ goodWords = {
 badWords = {
         "eu te odeio",
         "você é chata",
+        "chata",
+        "você é insuportável",
+        "sua insuportável",
+        "vagabunda",
+        "sua cabeçuda",
         "você é irritante",
         "você é inútil",
         "que decepção",
