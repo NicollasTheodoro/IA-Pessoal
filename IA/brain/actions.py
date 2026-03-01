@@ -5,6 +5,7 @@ import json
 import os
 import re
 from brain.prompt_builder import build_system_prompt
+from brain.memory import PersistentMemory
 
 
 api_key = os.getenv("MURF_API_KEY")
@@ -16,6 +17,7 @@ class Think:
         self.history = []
         self.model='qwen2.5:7b'
         self.messages = []
+        self.memory = PersistentMemory() 
     
     
 
@@ -30,7 +32,9 @@ class Think:
         self.history.append(user_input)
         self.personalidade.update_from_interaction(user_input)
 
-        system_prompt = build_system_prompt(self.personalidade)
+        memories = self.memory.data
+        system_prompt = build_system_prompt(self.personalidade, memories)
+
         self.messages = [msg for msg in self.messages if msg["role"] != "system"]
         self.messages.insert(0, {"role": "system", "content": system_prompt})
         # resposta = self.personalidade.generate(user_input) | Deixando de lado momentâneamente para testes.
@@ -40,7 +44,7 @@ class Think:
             model=self.model,
             messages=self.messages,
             options={
-                "num_predict": 100,
+                "num_predict": 200,
                 "temperature": 0.6,
                 "top_p": 0.9
                 }
@@ -54,9 +58,23 @@ class Think:
             print("RAW RESPONSE:", raw_content)
 
             dados = extrair_json(raw_content)
+
             if not dados:
                 print("JSON inválido")
                 return None
+
+            # ✅ Agora é seguro usar dados
+            if dados.get("memoria") and dados["memoria"].get("salvar"):
+                chave = dados["memoria"].get("chave")
+                valor = dados["memoria"].get("valor")
+
+                if chave and valor:
+                    self.memory.store(chave, valor)
+                    print(f"Memória salva: {chave} = {valor}")
+
+            # if not dados:
+            #     print("JSON inválido")
+            #     return None
 
         except json.JSONDecodeError:
             print("Erro ao decodificar JSON:")

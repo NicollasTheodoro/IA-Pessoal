@@ -2,18 +2,22 @@ from brain.personality import Personality
 from . import vocabulario as vc 
 
 
-def build_system_prompt(personality):
+def build_system_prompt(personality,  memories=None):
 
     format = """
     Responda SEMPRE em JSON válido usando aspas duplas.
 
 Formato:
 
-{{
-    "tipo": "fala" ou "acao",
-    "acao": string ou null,
-    "resposta": "texto que será falado"
-}}
+{
+    "tipo": "fala",
+  "resposta": "...",
+  "memoria": {
+      "salvar": true,
+      "chave": "gosto",
+      "valor": "programação - gosto porque..."
+    }
+}
 
 Regras:
 - "resposta" nunca pode ser null.
@@ -25,6 +29,13 @@ Regras:
     
     instructions = build_behavior_instructions(personality)
     slang_text = build_slang_instruction(personality)
+
+    memory_text = ""
+
+    if memories and len(memories) > 0:
+        memory_text = "INFORMAÇÕES IMPORTANTES SOBRE O USUÁRIO:\n"
+        for k, v in memories.items():
+            memory_text += f"- {k}: {v}\n"
 
     return f"""
            Você é Alice.
@@ -67,6 +78,11 @@ Traços atuais:
 COMPORTAMENTO OBRIGATÓRIO BASEADO NO ESTADO
 
 {instructions}
+
+━━━━━━━━━━━━━━━━━━
+MEMÓRIA PERSISTENTE
+
+{memory_text}
 
 ━━━━━━━━━━━━━━━━━━
 REGRAS TÉCNICAS (OBRIGATÓRIAS)

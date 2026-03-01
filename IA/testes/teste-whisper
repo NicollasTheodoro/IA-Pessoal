@@ -1,0 +1,45 @@
+import sounddevice as sd
+import numpy as np
+from faster_whisper import WhisperModel
+import keyboard
+import threading
+
+model = WhisperModel("small", compute_type="int8")
+
+samplerate = 16000
+gravando = False
+audio_chunks = []
+
+def callback(indata, frames, time, status):
+    if gravando:
+        audio_chunks.append(indata.copy())
+
+def alternar_gravacao():
+    global gravando, audio_chunks
+
+    if not gravando:
+        print("🎤 Começando gravação...")
+        audio_chunks = []
+        gravando = True
+    else:
+        print("🛑 Parando gravação...")
+        gravando = False
+
+        if audio_chunks:
+            audio_np = np.concatenate(audio_chunks).flatten()
+            print("Transcrevendo...")
+            segments, _ = model.transcribe(audio_np, language="pt")
+
+            for segment in segments:
+                print("Você disse:", segment.text)
+
+keyboard.add_hotkey("r", alternar_gravacao)
+
+with sd.InputStream(
+    samplerate=samplerate,
+    channels=1,
+    dtype="float32",
+    callback=callback
+):
+    print("Pressione 'R' para começar/parar a gravação.")
+    keyboard.wait()  # mantém o programa rodando
