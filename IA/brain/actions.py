@@ -17,7 +17,7 @@ class Think:
         self.history = []
         self.model='qwen2.5:7b'
         self.messages = []
-        self.memory = PersistentMemory() 
+        self.memory = PersistentMemory()
     
     
 
@@ -44,8 +44,8 @@ class Think:
             model=self.model,
             messages=self.messages,
             options={
-                "num_predict": 200,
-                "temperature": 0.6,
+                "num_predict": 120,
+                "temperature": 0.5,
                 "top_p": 0.9
                 }
         )
@@ -60,8 +60,13 @@ class Think:
             dados = extrair_json(raw_content)
 
             if not dados:
-                print("JSON inválido")
-                return None
+                print("JSON inválido, usando texto bruto")
+
+                dados = {
+                    "tipo": "fala",
+                    "acao": None,
+                    "resposta": raw_content
+                }
 
             # ✅ Agora é seguro usar dados
             if dados.get("memoria") and dados["memoria"].get("salvar"):

@@ -2,10 +2,13 @@
     "testes_mem\u00f3ria": "sucesso",
     "Bossa Nova": "Bossana",
     "palavra_chave_teste": "Bossa Nova",
-    "amigo": "N\u00c3\u00adcollas",
+    "amigo": "Nicollas",
     "personalidade": "gostar de postar coisa e fazer piada",
     "conhecimentos": "piadas",
     "opini\u00e3o": "fofoca",
     "estado_emocional": "neutral",
-    "desafio_tts": "Alice est\u00e1 enfrentando problemas com o TTS que faz suas respostas demorarem, o que est\u00e1 causando irrita\u00e7\u00e3o no usu\u00e1rio."
+    "desafio_tts": "Alice est\u00e1 enfrentando problemas com o TTS que faz suas respostas demorarem, o que est\u00e1 causando irrita\u00e7\u00e3o no usu\u00e1rio.",
+    "confirma\u00e7\u00e3o": "usu\u00e1rio confirmou que est\u00e1 ouvindo corretamente",
+    "gosto": "programa\u00e7\u00e3o - gosto porque \u00e9 uma forma de express\u00e3o e tamb\u00e9m porque gosto de resolver problemas",
+    "acao": "abrir_projeto"
 }
