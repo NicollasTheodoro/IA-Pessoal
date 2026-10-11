@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alice · IA Pessoal</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700;800&family=Instrument+Sans:wght@400;500;600&display=swap">
+<style>
+:root{--bg:#1a1326;--panel:#231a33;--line:#3a2d52;--ink:#f6f0ff;--dim:#a99bc4;--pink:#ff5c93;--sun:#ffd95a;--you:#33264a;--on-pink:#2a0a17;--face:#ff5c93;
+--display:'Bricolage Grotesque','Trebuchet MS',sans-serif;--body:'Instrument Sans',system-ui,sans-serif}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.5 var(--body)}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--sun);outline-offset:2px}
+.app{display:grid;grid-template-columns:330px 1fr;height:100%}
+aside{background:var(--panel);border-right:1px solid var(--line);overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:22px}
+.who{display:flex;gap:14px;align-items:center}
+.face{width:64px;height:64px;border-radius:50%;background:var(--face);display:grid;place-items:center;font-size:34px;border:2px solid var(--ink);box-shadow:4px 4px 0 var(--sun);flex:none;transition:background .3s}
+.who h1{font:800 28px/1 var(--display);margin:0}
+.who p{margin:4px 0 0;color:var(--dim);font-size:13px}
+h2{font:700 16px var(--display);margin:0 0 8px}
+input[type=text],input[type=url]{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.hint{color:var(--dim);font-size:12.5px;margin:6px 0 0}
+.tr{display:grid;grid-template-columns:78px 1fr 22px;gap:8px;align-items:center;margin-bottom:4px;font-size:13.5px}
+.tr input{accent-color:var(--pink);width:100%}
+.tr output{text-align:right;color:var(--sun)}
+.row{display:grid;grid-template-columns:92px 1fr 28px;gap:6px;margin-bottom:6px;align-items:center}
+.row label{color:var(--sun);font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row input{padding:5px 8px;font-size:13px}
+.x{background:none;border:0;color:var(--dim);font-size:16px}
+.x:hover{color:var(--pink)}
+.add{display:grid;grid-template-columns:92px 1fr auto;gap:6px;margin-top:10px}
+.btn{background:var(--pink);color:var(--on-pink);border:0;border-radius:8px;padding:8px 12px;font-weight:600}
+.btn.ghost{background:none;color:var(--ink);border:1px solid var(--line)}
+.btns{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.check{display:flex;gap:8px;align-items:center;margin-top:8px}
+main{display:flex;flex-direction:column;min-width:0;height:100%}
+header{display:flex;justify-content:space-between;align-items:center;padding:14px 22px;border-bottom:1px solid var(--line);gap:10px}
+header b{font:700 17px var(--display)}
+.pill{background:var(--you);border-radius:99px;padding:3px 12px;font-size:13px;color:var(--dim)}
+#menu{display:none}
+#log{flex:1;overflow-y:auto;padding:22px;display:flex;flex-direction:column;gap:14px}
+.msg{max-width:min(620px,86%);padding:10px 14px;border-radius:16px;white-space:pre-wrap;word-wrap:break-word}
+.msg.alice{align-self:flex-start;background:var(--pink);color:var(--on-pink);border:2px solid var(--ink);box-shadow:4px 4px 0 var(--ink);font-weight:500}
+.msg.you{align-self:flex-end;background:var(--you)}
+.msg.err{align-self:center;background:none;border:1px dashed var(--pink);color:var(--pink);font-size:13.5px}
+.meta{display:block;font-size:11.5px;opacity:.75;margin-top:4px}
+.typing{opacity:.8;font-style:italic}
+.empty{margin:auto;text-align:center;color:var(--dim);max-width:380px}
+.empty strong{display:block;font:800 26px var(--display);color:var(--ink);margin-bottom:6px}
+.chips{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:14px}
+.chips button{background:none;border:1px solid var(--line);border-radius:99px;padding:5px 12px}
+.chips button:hover{border-color:var(--sun)}
+form{display:flex;gap:8px;padding:14px 22px;border-top:1px solid var(--line)}
+form input{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:11px 14px;color:var(--ink)}
+.mic{background:var(--panel);border:1px solid var(--line);border-radius:10px;width:46px;font-size:18px}
+.mic.on{background:var(--sun);color:#000}
+#toast{position:fixed;bottom:84px;left:50%;transform:translateX(-50%);background:var(--sun);color:#000;padding:8px 16px;border-radius:99px;font-size:13.5px;font-weight:500;opacity:0;pointer-events:none;transition:opacity .2s;max-width:90%}
+#toast.on{opacity:1}
+@media(max-width:800px){
+.app{grid-template-columns:1fr}
+aside{position:fixed;inset:0 15% 0 0;z-index:5;transform:translateX(-100%);transition:transform .2s}
+aside.open{transform:none}
+#menu{display:inline-block}
+.msg{max-width:92%}
+}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="app">
+<aside id="side">
+  <div class="who">
+    <div class="face" id="face">😐</div>
+    <div><h1>Alice</h1><p id="state">Neutra</p></div>
+  </div>
+
+  <section>
+    <h2>Personalidade</h2>
+    <div id="traits"></div>
+    <p class="hint">Sobem e descem conforme o que você diz. Mexa nos controles para testar os estados: neutra, animada, irritada e carente.</p>
+  </section>
+
+  <section>
+    <h2>Ações no PC</h2>
+    <div class="btns" id="acts"></div>
+    <label class="check"><input type="checkbox" id="run"> Executar as ações que a Alice decidir sozinha</label>
+  </section>
+
+  <section>
+    <h2>Memória</h2>
+    <div id="mem"></div>
+    <div class="add">
+      <input type="text" id="nk" placeholder="chave" aria-label="Nova chave">
+      <input type="text" id="nv" placeholder="valor" aria-label="Novo valor">
+      <button class="btn" id="addmem">Salvar</button>
+    </div>
+    <div class="btns"><button class="btn ghost" id="exp">Exportar JSON</button></div>
+  </section>
+
+  <section>
+    <h2>Conexão</h2>
+    <label class="check" style="margin-top:0"><input type="checkbox" id="speak"> Alice fala as respostas (Murf)</label>
+    <p class="hint" id="conn"></p>
+    <input type="url" id="api" placeholder="Servidor (deixe vazio para automático)" aria-label="Endereço do servidor" style="margin-top:8px">
+  </section>
+</aside>
+
+<main>
+  <header>
+    <button class="btn ghost" id="menu" aria-label="Abrir painel">☰</button>
+    <b>Conversa</b>
+    <span class="pill" id="lat">sem resposta ainda</span>
+  </header>
+  <div id="log" aria-live="polite"></div>
+  <form id="f">
+    <button type="button" class="mic" id="mic" aria-label="Falar com a Alice" title="Falar">🎤</button>
+    <input id="inp" type="text" autocomplete="off" placeholder="Fala alguma coisa pra Alice..." aria-label="Mensagem">
+    <button class="btn" type="submit">Enviar</button>
+  </form>
+</main>
+</div>
+<div id="toast" role="status"></div>
+
+<script>
+const $=s=>document.querySelector(s);
+const MOODS={neutral:{n:'Neutra',f:'😐',c:'#ff5c93'},excited:{n:'Animada',f:'🤩',c:'#ffd95a'},irritated:{n:'Irritada',f:'😤',c:'#ff7a45'},needy:{n:'Carente',f:'🥺',c:'#b79bff'}};
+const TRAITS={carinho:'Carinho',energia:'Energia',sarcasmo:'Sarcasmo',paciencia:'Paciência'};
+const BASE={carinho:7,energia:5,sarcasmo:4,paciencia:3};
+const ACTIONS={abrir_navegador:'Abrir navegador',abrir_youtube:'Abrir YouTube',abrir_projeto:'Abrir projeto'};
+let S={mood:'neutral',traits:{...BASE},memory:{}};
+
+const load=(k,d)=>{try{const v=localStorage.getItem(k);return v===null?d:JSON.parse(v)}catch(e){return d}};
+const save=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
+$('#api').value=load('alice_api','');
+$('#speak').checked=load('alice_speak',false);
+$('#run').checked=load('alice_run',false);
+$('#api').onchange=e=>{save('alice_api',e.target.value.trim());boot()};
+$('#speak').onchange=e=>save('alice_speak',e.target.checked);
+$('#run').onchange=e=>save('alice_run',e.target.checked);
+$('#menu').onclick=()=>$('#side').classList.toggle('open');
+
+function toast(t){const e=$('#toast');e.textContent=t;e.classList.add('on');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove('on'),3200)}
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+/* servidor: base() === null significa modo demonstração (arquivo aberto direto) */
+function base(){const v=$('#api').value.trim().replace(/\/$/,'');if(v)return v;return location.protocol.startsWith('http')?'':null}
+async function call(path,method,body){
+  const r=await fetch(base()+path,{method:method||'GET',headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok)throw Object.assign(new Error(j.error||('Erro HTTP '+r.status)),{data:j});
+  return j;
+}
+
+/* estado */
+function applyState(st){
+  if(st.mood)S.mood=st.mood;if(st.traits)S.traits=st.traits;if(st.memory)S.memory=st.memory;
+  renderAll();
+}
+function renderAll(){
+  const m=MOODS[S.mood]||MOODS.neutral;
+  $('#face').textContent=m.f;$('#state').textContent=m.n;
+  document.documentElement.style.setProperty('--face',m.c);
+  renderTraits();renderMem();
+}
+function renderTraits(){
+  const box=$('#traits');box.textContent='';
+  Object.keys(TRAITS).forEach(k=>{
+    const r=document.createElement('div');r.className='tr';
+    const l=document.createElement('label');l.textContent=TRAITS[k];l.htmlFor='t_'+k;
+    const i=document.createElement('input');i.type='range';i.min=0;i.max=10;i.id='t_'+k;i.value=S.traits[k];
+    const o=document.createElement('output');o.textContent=S.traits[k];
+    i.oninput=()=>o.textContent=i.value;
+    i.onchange=()=>setTrait(k,+i.value);
+    r.append(l,i,o);box.append(r);
+  });
+}
+function renderMem(){
+  const box=$('#mem');box.textContent='';
+  const ks=Object.keys(S.memory);
+  if(!ks.length){const p=document.createElement('p');p.className='hint';p.textContent='Nada guardado ainda. A Alice salva sozinha o que achar importante.';box.append(p)}
+  ks.forEach(k=>{
+    const r=document.createElement('div');r.className='row';
+    const l=document.createElement('label');l.textContent=k;l.title=k;
+    const i=document.createElement('input');i.type='text';i.value=S.memory[k];i.setAttribute('aria-label',k);
+    i.onchange=()=>memSet(k,i.value);
+    const x=document.createElement('button');x.className='x';x.textContent='✕';x.setAttribute('aria-label','Apagar '+k);
+    x.onclick=()=>memDel(k);
+    r.append(l,i,x);box.append(r);
+  });
+}
+async function setTrait(k,v){
+  try{
+    if(base()===null){S.traits[k]=v;demoEmotion();renderAll()}
+    else applyState(await call('/traits','PUT',{[k]:v}));
+  }catch(e){toast(e.message)}
+}
+async function memSet(k,v){
+  try{if(base()===null)S.memory[k]=v;else S.memory=(await call('/memory','PUT',{key:k,value:v})).memory;renderMem()}catch(e){toast(e.message)}
+}
+async function memDel(k){
+  try{if(base()===null)delete S.memory[k];else S.memory=(await call('/memory','DELETE',{key:k})).memory;renderMem()}catch(e){toast(e.message)}
+}
+$('#addmem').onclick=()=>{const k=$('#nk').value.trim();if(!k)return;memSet(k,$('#nv').value.trim());$('#nk').value=$('#nv').value=''};
+$('#exp').onclick=()=>{
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([JSON.stringify(S.memory,null,4)],{type:'application/json'}));
+  a.download='memory.json';a.click();
+};
+Object.keys(ACTIONS).forEach(k=>{
+  const b=document.createElement('button');b.className='btn ghost';b.textContent=ACTIONS[k];
+  b.onclick=async()=>{
+    if(!confirm('Executar "'+ACTIONS[k]+'" no seu PC agora?'))return;
+    if(base()===null){toast('Modo demonstração: nada foi executado.');return}
+    try{await call('/action','POST',{acao:k});toast('Ação enviada: '+ACTIONS[k])}catch(e){toast(e.message)}
+  };
+  $('#acts').append(b);
+});
+
+/* modo demonstração: reproduz a lógica do personality.py */
+const GOOD=['amo você','gosto de você','você é incrível','parabéns','você é demais','muito bem'];
+const BAD=['eu te odeio','chata','cala a boca','você é idiota','você é inútil','vai embora'];
+const clamp=v=>Math.max(0,Math.min(10,v));
+function demoEmotion(){
+  const T=S.traits;
+  if(Object.keys(BASE).every(k=>T[k]===BASE[k]))S.mood='neutral';
+  else if(T.energia>7&&T.paciencia>5)S.mood='excited';
+  else if(T.paciencia<=2)S.mood='irritated';
+  else if(T.carinho>=8&&T.energia<=3)S.mood='needy';
+}
+function demoUpdate(t){
+  t=t.toLowerCase();const T=S.traits;
+  if(GOOD.some(w=>t.includes(w))){T.carinho++;T.energia++;T.paciencia++}
+  if(BAD.some(w=>t.includes(w))){T.carinho--;T.energia--;T.paciencia--;T.sarcasmo++}
+  Object.keys(T).forEach(k=>T[k]=clamp(T[k]));demoEmotion();
+}
+const pick=a=>a[Math.floor(Math.random()*a.length)];
+function demoReply(t){
+  const s=t.toLowerCase();
+  const nome=s.match(/meu nome é (\p{L}+)/u);
+  if(nome){S.memory.nome=nome[1];return{reply:'Anotado, '+nome[1]+'. Não prometo lembrar de tudo, mas vou tentar.',tipo:'fala',memoria:{salvar:true,chave:'nome',valor:nome[1]}}}
+  if(/youtube/.test(s))return{reply:'Claro! Abrindo o YouTube.',tipo:'acao',acao:'abrir_youtube'};
+  if(/navegador/.test(s))return{reply:'Já vou abrir o navegador.',tipo:'acao',acao:'abrir_navegador'};
+  const r={neutral:['Interessante. Continuo fingindo que me importo.','Hm. Boa pergunta. Péssima hora, mas boa.'],
+    excited:['RECEBA! Adorei isso, manda mais.','BRUTAL. Não sobra nada pro beta.'],
+    irritated:['Fala logo, minha paciência acabou.','Ótimo. Mais uma. Vai, desembucha.'],
+    needy:['Você some e volta assim? Me dá atenção, vai.','Fica mais um pouquinho comigo?']};
+  return{reply:pick(r[S.mood]||r.neutral),tipo:'fala'};
+}
+
+/* chat */
+function emptyState(){
+  const d=document.createElement('div');d.className='empty';d.id='empty';
+  d.innerHTML='<strong>Pode falar.</strong>Elogie, provoque ou peça para abrir o YouTube e veja o humor da Alice mudar no painel.';
+  const c=document.createElement('div');c.className='chips';
+  ['Alice, você é incrível','Você é chata','Abre o YouTube'].forEach(t=>{
+    const b=document.createElement('button');b.type='button';b.textContent=t;b.onclick=()=>send(t);c.append(b)});
+  d.append(c);$('#log').append(d);
+}
+function bubble(who,text,meta){
+  $('#empty')?.remove();
+  const d=document.createElement('div');d.className='msg '+who;d.textContent=text;
+  if(meta){const m=document.createElement('span');m.className='meta';m.textContent=meta;d.append(m)}
+  $('#log').append(d);$('#log').scrollTop=1e9;return d;
+}
+async function send(text){
+  text=text.trim();if(!text)return;
+  bubble('you',text);$('#inp').value='';
+  const w=bubble('alice','Alice está pensando...');w.classList.add('typing');
+  const t0=performance.now();
+  const tick=setInterval(()=>{w.firstChild.textContent='Alice está pensando... '+Math.round((performance.now()-t0)/1000)+'s'},1000);
+  let out;
+  try{
+    if(base()===null){await sleep(600+Math.random()*600);demoUpdate(text);out=demoReply(text);out.mood=S.mood;out.traits=S.traits;out.memory=S.memory}
+    else out=await call('/chat','POST',{message:text,speak:$('#speak').checked,run_actions:$('#run').checked});
+  }catch(e){
+    clearInterval(tick);w.remove();
+    const off=e instanceof TypeError;
+    bubble('err',off?'Não consegui falar com o servidor. Confira se o server.py está rodando.':e.message);
+    if(e.data)applyState(e.data);
+    return;
+  }
+  clearInterval(tick);w.remove();
+  const dt=((performance.now()-t0)/1000).toFixed(1);
+  const parts=[];
+  if(out.tipo==='acao')parts.push('ação: '+(out.acao||'?'));
+  parts.push('LLM '+(out.timings?out.timings.llm:dt)+'s');
+  bubble('alice',out.reply,parts.join(' · '));
+  $('#lat').textContent='última resposta: '+dt+'s';
+  if(out.memoria&&out.memoria.salvar&&out.memoria.chave)toast('Memória salva: '+out.memoria.chave+' = '+out.memoria.valor);
+  applyState(out);
+}
+$('#f').onsubmit=e=>{e.preventDefault();send($('#inp').value)};
+
+/* microfone do navegador (aperte e fale) */
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+if(!SR){$('#mic').hidden=true}else{
+  const rec=new SR();rec.lang='pt-BR';rec.interimResults=false;
+  rec.onresult=e=>send(e.results[0][0].transcript);
+  rec.onend=()=>$('#mic').classList.remove('on');
+  $('#mic').onclick=()=>{$('#mic').classList.add('on');try{rec.start()}catch(e){}};
+}
+
+async function boot(){
+  const c=$('#conn');
+  if(base()===null){c.textContent='Modo demonstração: nada aqui usa o seu código. Rode o server.py e abra http://127.0.0.1:5000 para falar com a Alice de verdade.';renderAll();return}
+  try{
+    const st=await call('/state');applyState(st);
+    c.textContent=st.voz?'Conectada ao servidor. Voz do Murf disponível.':'Conectada ao servidor. Voz desativada (chave do Murf não encontrada).';
+  }catch(e){c.textContent='Servidor não respondeu. Rode: python IA/server.py';renderAll()}
+}
+emptyState();boot();
+</script>
+</body>
+</html>
