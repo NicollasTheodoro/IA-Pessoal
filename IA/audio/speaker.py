@@ -1,66 +1,107 @@
-import requests
-import pygame
-import sys
+import glob
 import os
+import queue
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+
+import pygame
+import requests
 from murf import Murf
 
 api_key = os.getenv("MURF_API_KEY")
 
+
 class Speak:
+    """
+    Fluxo em pipeline: cada frase vai para a fila assim que o LLM a termina.
+    O Murf sintetiza até 2 frases ao mesmo tempo, e o áudio toca na ordem certa,
+    então a frase 2 já está pronta quando a frase 1 acaba de tocar.
+    """
+
     def __init__(self):
         self.output_dir = "falas"
         self.client = Murf(api_key=api_key)
         self.voice_id = "pt-BR-Isadora"
         self.multi_native_locale = "pt-BR"
+        self.http = requests.Session()  # reaproveita a conexão: download mais rápido
 
-        pygame.mixer.init()  # inicializa só uma vez
+        os.makedirs(self.output_dir, exist_ok=True)
+        for velho in glob.glob(os.path.join(self.output_dir, "audio_*.wav")):
+            try:
+                os.remove(velho)  # limpa os áudios que sobraram de execuções anteriores
+            except OSError:
+                pass
 
-    def falar(self, output_assistant):
+        pygame.mixer.init()
+        self._pool = ThreadPoolExecutor(max_workers=2)
+        self._fila = queue.Queue()  # guarda as "promessas" de áudio, na ordem de fala
+        threading.Thread(target=self._tocar_loop, daemon=True).start()
 
+    # ---------- API pública ----------
+    def enfileirar(self, texto):
+        """Não bloqueia: manda sintetizar e toca quando chegar a vez."""
+        texto = (texto or "").strip()
+        if texto:
+            self._fila.put(self._pool.submit(self._sintetizar, texto))
+
+    def esperar(self):
+        """Bloqueia até tudo que foi enfileirado terminar de tocar."""
+        self._fila.join()
+
+    def falar(self, texto):
+        """Compatível com o código antigo: enfileira e espera acabar."""
+        self.enfileirar(texto)
+        self.esperar()
+
+    def parar(self):
+        """Interrompe a fala atual e descarta o que estava na fila."""
+        try:
+            while True:
+                fut = self._fila.get_nowait()
+                fut.cancel()
+                self._fila.task_done()
+        except queue.Empty:
+            pass
+        pygame.mixer.music.stop()
+
+    # ---------- internos ----------
+    def _sintetizar(self, texto):
         response = self.client.text_to_speech.generate(
             voice_id=self.voice_id,
-            text=output_assistant,
-            multi_native_locale=self.multi_native_locale
+            text=texto,
+            multi_native_locale=self.multi_native_locale,
         )
+        url = response.audio_file
+        if not url:
+            raise RuntimeError("a API do Murf não retornou arquivo de áudio")
 
-        audio_url = response.audio_file
-
-        if not audio_url:
-            print("❌ ERRO: API não retornou arquivo de áudio.")
-            return
-
-        r = requests.get(audio_url)
-
+        r = self.http.get(url, timeout=20)
         if "audio" not in r.headers.get("Content-Type", ""):
-            print("❌ ERRO: Resposta não é áudio válido.")
-            print(r.text[:500])
-            return
+            raise RuntimeError("a resposta do Murf não é áudio: " + r.text[:200])
 
-        # 🔥 PARA E DESCARREGA O ÁUDIO ANTERIOR
-        if pygame.mixer.music.get_busy():
-            pygame.mixer.music.stop()
-
-        try:
-            pygame.mixer.music.unload()
-        except:
-            pass
-
-        # 🔥 Nome único evita conflito
-        filename = f"audio_{int(time.time()*1000)}.wav"
-        filepath = os.path.join(self.output_dir, filename)
-
-        with open(filepath, "wb") as f:
+        caminho = os.path.join(self.output_dir, f"audio_{int(time.time() * 1000)}_{threading.get_ident()}.wav")
+        with open(caminho, "wb") as f:
             f.write(r.content)
+        return caminho
 
-        pygame.mixer.music.load(filepath)
-        pygame.mixer.music.play()
-
-        while pygame.mixer.music.get_busy():
-            pygame.time.Clock().tick(10)
-
-
-# teste
-
-# speak = Speak()
-# speak.falar("Olá!")
+    def _tocar_loop(self):
+        while True:
+            fut = self._fila.get()
+            caminho = None
+            try:
+                caminho = fut.result()
+                pygame.mixer.music.load(caminho)
+                pygame.mixer.music.play()
+                while pygame.mixer.music.get_busy():
+                    pygame.time.wait(50)
+            except Exception as e:
+                print("Erro na voz:", e)
+            finally:
+                try:
+                    pygame.mixer.music.unload()
+                    if caminho:
+                        os.remove(caminho)  # não acumula mais arquivos na pasta falas/
+                except Exception:
+                    pass
+                self._fila.task_done()

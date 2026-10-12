@@ -34,7 +34,10 @@ input[type=text],input[type=url]{width:100%;background:var(--bg);border:1px soli
 .add{display:grid;grid-template-columns:92px 1fr auto;gap:6px;margin-top:10px}
 .btn{background:var(--pink);color:var(--on-pink);border:0;border-radius:8px;padding:8px 12px;font-weight:600}
 .btn.ghost{background:none;color:var(--ink);border:1px solid var(--line)}
+.btn:disabled{opacity:.5;cursor:default}
+[hidden]{display:none!important}
 .btns{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.btns .btn{padding:6px 10px;font-size:13px}
 .check{display:flex;gap:8px;align-items:center;margin-top:8px}
 main{display:flex;flex-direction:column;min-width:0;height:100%}
 header{display:flex;justify-content:space-between;align-items:center;padding:14px 22px;border-bottom:1px solid var(--line);gap:10px}
@@ -45,6 +48,7 @@ header b{font:700 17px var(--display)}
 .msg{max-width:min(620px,86%);padding:10px 14px;border-radius:16px;white-space:pre-wrap;word-wrap:break-word}
 .msg.alice{align-self:flex-start;background:var(--pink);color:var(--on-pink);border:2px solid var(--ink);box-shadow:4px 4px 0 var(--ink);font-weight:500}
 .msg.you{align-self:flex-end;background:var(--you)}
+.msg.note{align-self:center;background:none;border:1px dashed var(--sun);color:var(--sun);font-size:13.5px}
 .msg.err{align-self:center;background:none;border:1px dashed var(--pink);color:var(--pink);font-size:13.5px}
 .meta{display:block;font-size:11.5px;opacity:.75;margin-top:4px}
 .typing{opacity:.8;font-style:italic}
@@ -53,10 +57,12 @@ header b{font:700 17px var(--display)}
 .chips{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:14px}
 .chips button{background:none;border:1px solid var(--line);border-radius:99px;padding:5px 12px}
 .chips button:hover{border-color:var(--sun)}
-form{display:flex;gap:8px;padding:14px 22px;border-top:1px solid var(--line)}
-form input{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:11px 14px;color:var(--ink)}
+#f{display:flex;gap:8px;padding:14px 22px;border-top:1px solid var(--line)}
+#f input{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:11px 14px;color:var(--ink)}
 .mic{background:var(--panel);border:1px solid var(--line);border-radius:10px;width:46px;font-size:18px}
 .mic.on{background:var(--sun);color:#000}
+#status{padding:0 22px 8px;color:var(--dim);font-size:13px;min-height:1.5em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mic.live{background:var(--pink);color:var(--on-pink);border-color:var(--ink)}
 #toast{position:fixed;bottom:84px;left:50%;transform:translateX(-50%);background:var(--sun);color:#000;padding:8px 16px;border-radius:99px;font-size:13.5px;font-weight:500;opacity:0;pointer-events:none;transition:opacity .2s;max-width:90%}
 #toast.on{opacity:1}
 @media(max-width:800px){
@@ -103,6 +109,8 @@ aside.open{transform:none}
   <section>
     <h2>Conexão</h2>
     <label class="check" style="margin-top:0"><input type="checkbox" id="speak"> Alice fala as respostas (Murf)</label>
+    <label class="check"><input type="checkbox" id="srvmic" checked> Chamada: ouvir pelo microfone do PC (Whisper)</label>
+    <p class="hint">Desmarque para usar o reconhecimento de voz do navegador (só Chrome ou Edge).</p>
     <p class="hint" id="conn"></p>
     <input type="url" id="api" placeholder="Servidor (deixe vazio para automático)" aria-label="Endereço do servidor" style="margin-top:8px">
   </section>
@@ -112,13 +120,15 @@ aside.open{transform:none}
   <header>
     <button class="btn ghost" id="menu" aria-label="Abrir painel">☰</button>
     <b>Conversa</b>
-    <span class="pill" id="lat">sem resposta ainda</span>
+    <span style="display:flex;gap:8px;align-items:center"><button class="btn ghost" id="stop" hidden>Calar a Alice</button><span class="pill" id="lat">sem resposta ainda</span></span>
   </header>
   <div id="log" aria-live="polite"></div>
+  <div id="status" aria-live="polite"></div>
   <form id="f">
-    <button type="button" class="mic" id="mic" aria-label="Falar com a Alice" title="Falar">🎤</button>
+    <button type="button" class="mic" id="mic" aria-label="Falar com a Alice" title="Falar uma frase">🎤</button>
+    <button type="button" class="mic" id="call" aria-label="Iniciar chamada" title="Chamada: conversa contínua por voz">📞</button>
     <input id="inp" type="text" autocomplete="off" placeholder="Fala alguma coisa pra Alice..." aria-label="Mensagem">
-    <button class="btn" type="submit">Enviar</button>
+    <button class="btn" type="submit" id="go">Enviar</button>
   </form>
 </main>
 </div>
@@ -129,21 +139,28 @@ const $=s=>document.querySelector(s);
 const MOODS={neutral:{n:'Neutra',f:'😐',c:'#ff5c93'},excited:{n:'Animada',f:'🤩',c:'#ffd95a'},irritated:{n:'Irritada',f:'😤',c:'#ff7a45'},needy:{n:'Carente',f:'🥺',c:'#b79bff'}};
 const TRAITS={carinho:'Carinho',energia:'Energia',sarcasmo:'Sarcasmo',paciencia:'Paciência'};
 const BASE={carinho:7,energia:5,sarcasmo:4,paciencia:3};
-const ACTIONS={abrir_navegador:'Abrir navegador',abrir_youtube:'Abrir YouTube',abrir_projeto:'Abrir projeto'};
-let S={mood:'neutral',traits:{...BASE},memory:{}};
+const DEMO_ACTIONS=[{nome:'abrir_navegador',descricao:'abre o navegador'},{nome:'abrir_youtube',descricao:'abre o YouTube'},{nome:'abrir_projeto',descricao:'abre a pasta do projeto da Alice'}];
+let S={mood:'neutral',traits:{...BASE},memory:{},voz:false,ouvido:false};
+let busy=false,online=false,callOn=false,speechQueue=Promise.resolve();
 
 const load=(k,d)=>{try{const v=localStorage.getItem(k);return v===null?d:JSON.parse(v)}catch(e){return d}};
 const save=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
 $('#api').value=load('alice_api','');
 $('#speak').checked=load('alice_speak',false);
 $('#run').checked=load('alice_run',false);
+$('#srvmic').checked=load('alice_srvmic',true);
+$('#srvmic').onchange=e=>save('alice_srvmic',e.target.checked);
 $('#api').onchange=e=>{save('alice_api',e.target.value.trim());boot()};
-$('#speak').onchange=e=>save('alice_speak',e.target.checked);
+$('#speak').onchange=e=>{save('alice_speak',e.target.checked);syncStop()};
 $('#run').onchange=e=>save('alice_run',e.target.checked);
 $('#menu').onclick=()=>$('#side').classList.toggle('open');
+$('#stop').onclick=()=>call('/stop','POST').catch(e=>toast(e.message));
+function syncStop(){$('#stop').hidden=!(S.voz&&$('#speak').checked)}
 
-function toast(t){const e=$('#toast');e.textContent=t;e.classList.add('on');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove('on'),3200)}
+function toast(t){const e=$('#toast');e.textContent=t;e.classList.add('on');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove('on'),3800)}
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+/* voz de reserva: se o Murf não existe, a chamada usa a voz do próprio navegador */
+function browserSay(t){return new Promise(r=>{try{const u=new SpeechSynthesisUtterance(t);u.lang='pt-BR';u.onend=u.onerror=()=>r();speechSynthesis.speak(u)}catch(e){r()}})}
 
 /* servidor: base() === null significa modo demonstração (arquivo aberto direto) */
 function base(){const v=$('#api').value.trim().replace(/\/$/,'');if(v)return v;return location.protocol.startsWith('http')?'':null}
@@ -152,6 +169,23 @@ async function call(path,method,body){
   const j=await r.json().catch(()=>({}));
   if(!r.ok)throw Object.assign(new Error(j.error||('Erro HTTP '+r.status)),{data:j});
   return j;
+}
+/* /chat responde em streaming (Server-Sent Events): um evento por frase, ação ou memória */
+async function streamChat(payload,onEv){
+  const r=await fetch(base()+'/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  if(!r.ok){const j=await r.json().catch(()=>({}));throw Object.assign(new Error(j.error||('Erro HTTP '+r.status)),{data:j})}
+  const rd=r.body.getReader(),dec=new TextDecoder();let buf='';
+  for(;;){
+    const {value,done}=await rd.read();if(done)break;
+    buf+=dec.decode(value,{stream:true});
+    let i;
+    while((i=buf.indexOf('\n\n'))>=0){
+      const raw=buf.slice(0,i);buf=buf.slice(i+2);
+      let ev='message',data='';
+      raw.split('\n').forEach(l=>{if(l.startsWith('event:'))ev=l.slice(6).trim();else if(l.startsWith('data:'))data+=l.slice(5).trim()});
+      if(data)onEv(ev,JSON.parse(data));
+    }
+  }
 }
 
 /* estado */
@@ -209,15 +243,31 @@ $('#exp').onclick=()=>{
   a.href=URL.createObjectURL(new Blob([JSON.stringify(S.memory,null,4)],{type:'application/json'}));
   a.download='memory.json';a.click();
 };
-Object.keys(ACTIONS).forEach(k=>{
-  const b=document.createElement('button');b.className='btn ghost';b.textContent=ACTIONS[k];
-  b.onclick=async()=>{
-    if(!confirm('Executar "'+ACTIONS[k]+'" no seu PC agora?'))return;
-    if(base()===null){toast('Modo demonstração: nada foi executado.');return}
-    try{await call('/action','POST',{acao:k});toast('Ação enviada: '+ACTIONS[k])}catch(e){toast(e.message)}
-  };
-  $('#acts').append(b);
-});
+
+/* ações: a lista vem do servidor (acoes.py), então ação nova aparece sozinha aqui */
+const rotulo=n=>{const t=n.replace(/_/g,' ');return t[0].toUpperCase()+t.slice(1)};
+function renderActions(lista){
+  const box=$('#acts');box.textContent='';
+  lista.forEach(a=>{
+    const b=document.createElement('button');b.className='btn ghost';b.textContent=rotulo(a.nome);b.title=a.descricao;
+    b.onclick=()=>runAction(a);
+    box.append(b);
+  });
+}
+async function runAction(a){
+  let arg=null;
+  if(a.arg){
+    arg=prompt(rotulo(a.nome)+' — '+a.arg+':');
+    if(arg===null||!arg.trim())return;
+    arg=arg.trim();
+  }else if(!confirm('Executar "'+rotulo(a.nome)+'" no seu PC agora?'))return;
+  if(base()===null){toast('Modo demonstração: nada foi executado.');return}
+  try{const j=await call('/action','POST',{acao:a.nome,arg});toast(j.resultado||'Ação enviada.')}catch(e){toast(e.message)}
+}
+async function loadActions(){
+  if(base()===null){renderActions(DEMO_ACTIONS);return}
+  try{renderActions((await call('/actions')).acoes)}catch(e){renderActions(DEMO_ACTIONS)}
+}
 
 /* modo demonstração: reproduz a lógica do personality.py */
 const GOOD=['amo você','gosto de você','você é incrível','parabéns','você é demais','muito bem'];
@@ -229,6 +279,7 @@ function demoEmotion(){
   else if(T.energia>7&&T.paciencia>5)S.mood='excited';
   else if(T.paciencia<=2)S.mood='irritated';
   else if(T.carinho>=8&&T.energia<=3)S.mood='needy';
+  else S.mood='neutral';
 }
 function demoUpdate(t){
   t=t.toLowerCase();const T=S.traits;
@@ -240,14 +291,14 @@ const pick=a=>a[Math.floor(Math.random()*a.length)];
 function demoReply(t){
   const s=t.toLowerCase();
   const nome=s.match(/meu nome é (\p{L}+)/u);
-  if(nome){S.memory.nome=nome[1];return{reply:'Anotado, '+nome[1]+'. Não prometo lembrar de tudo, mas vou tentar.',tipo:'fala',memoria:{salvar:true,chave:'nome',valor:nome[1]}}}
-  if(/youtube/.test(s))return{reply:'Claro! Abrindo o YouTube.',tipo:'acao',acao:'abrir_youtube'};
-  if(/navegador/.test(s))return{reply:'Já vou abrir o navegador.',tipo:'acao',acao:'abrir_navegador'};
+  if(nome){S.memory.nome=nome[1];return{reply:'Anotado, '+nome[1]+'. Não prometo lembrar de tudo, mas vou tentar.',memoria:{chave:'nome',valor:nome[1]}}}
+  if(/youtube/.test(s))return{reply:'Claro! Abrindo o YouTube.',acao:'abrir_youtube'};
+  if(/navegador/.test(s))return{reply:'Já vou abrir o navegador.',acao:'abrir_navegador'};
   const r={neutral:['Interessante. Continuo fingindo que me importo.','Hm. Boa pergunta. Péssima hora, mas boa.'],
     excited:['RECEBA! Adorei isso, manda mais.','BRUTAL. Não sobra nada pro beta.'],
     irritated:['Fala logo, minha paciência acabou.','Ótimo. Mais uma. Vai, desembucha.'],
     needy:['Você some e volta assim? Me dá atenção, vai.','Fica mais um pouquinho comigo?']};
-  return{reply:pick(r[S.mood]||r.neutral),tipo:'fala'};
+  return{reply:pick(r[S.mood]||r.neutral)};
 }
 
 /* chat */
@@ -259,57 +310,171 @@ function emptyState(){
     const b=document.createElement('button');b.type='button';b.textContent=t;b.onclick=()=>send(t);c.append(b)});
   d.append(c);$('#log').append(d);
 }
-function bubble(who,text,meta){
+function bubble(who,text){
   $('#empty')?.remove();
-  const d=document.createElement('div');d.className='msg '+who;d.textContent=text;
-  if(meta){const m=document.createElement('span');m.className='meta';m.textContent=meta;d.append(m)}
+  const d=document.createElement('div');d.className='msg '+who;
+  const t=document.createElement('span');t.className='txt';t.textContent=text;d.append(t);
   $('#log').append(d);$('#log').scrollTop=1e9;return d;
 }
+function setMeta(d,text){
+  let m=d.querySelector('.meta');
+  if(!m){m=document.createElement('span');m.className='meta';d.append(m)}
+  m.textContent=text;
+}
+function setBusy(v){busy=v;$('#go').disabled=v;$('#inp').disabled=v;if(!v)$('#inp').focus()}
+
 async function send(text){
-  text=text.trim();if(!text)return;
+  text=text.trim();if(!text||busy)return;
+  setBusy(true);
   bubble('you',text);$('#inp').value='';
   const w=bubble('alice','Alice está pensando...');w.classList.add('typing');
+  const txt=w.querySelector('.txt');
   const t0=performance.now();
-  const tick=setInterval(()=>{w.firstChild.textContent='Alice está pensando... '+Math.round((performance.now()-t0)/1000)+'s'},1000);
-  let out;
+  const tick=setInterval(()=>{txt.textContent='Alice está pensando... '+Math.round((performance.now()-t0)/1000)+'s'},1000);
+  let falas=0,acoes=[],ignoradas=[],tempo=null,erro=null,fim=null;
+  const vozNavegador=callOn&&!S.voz;
+
+  const onEv=(ev,d)=>{
+    if(ev==='sentence'){
+      if(!falas){clearInterval(tick);w.classList.remove('typing');txt.textContent=d.text;tempo=((performance.now()-t0)/1000).toFixed(1)}
+      else txt.textContent+=' '+d.text;
+      if(vozNavegador){const t=d.text;speechQueue=speechQueue.then(()=>browserSay(t))}
+      falas++;$('#log').scrollTop=1e9;
+    }else if(ev==='acao'){
+      acoes.push(d.acao+(d.arg?' ('+d.arg+')':''));
+      toast(d.executada?(d.resultado||'Ação executada.'):'A Alice quer executar "'+d.acao+'". Marque "Executar as ações" no painel para liberar.');
+    }else if(ev==='acao_ignorada'){
+      ignoradas.push(d.acao);
+    }else if(ev==='memoria'){
+      toast('Memória salva: '+d.chave+' = '+d.valor);
+    }else if(ev==='erro'){erro=d.error}
+    else if(ev==='fim'){fim=d}
+  };
+
   try{
-    if(base()===null){await sleep(600+Math.random()*600);demoUpdate(text);out=demoReply(text);out.mood=S.mood;out.traits=S.traits;out.memory=S.memory}
-    else out=await call('/chat','POST',{message:text,speak:$('#speak').checked,run_actions:$('#run').checked});
+    if(base()===null){
+      await sleep(600+Math.random()*600);demoUpdate(text);
+      const o=demoReply(text);
+      onEv('sentence',{text:o.reply});
+      if(o.acao)onEv('acao',{acao:o.acao,executada:false});
+      if(o.memoria)onEv('memoria',o.memoria);
+      onEv('fim',{mood:S.mood,traits:S.traits,memory:S.memory,timings:{primeira:tempo,total:tempo}});
+    }else{
+      await streamChat({message:text,speak:$('#speak').checked||(callOn&&S.voz),run_actions:$('#run').checked},onEv);
+    }
   }catch(e){
-    clearInterval(tick);w.remove();
-    const off=e instanceof TypeError;
-    bubble('err',off?'Não consegui falar com o servidor. Confira se o server.py está rodando.':e.message);
-    if(e.data)applyState(e.data);
-    return;
+    erro=e instanceof TypeError?'Não consegui falar com o servidor. Confira se o server.py está rodando.':e.message;
+    if(e.data&&e.data.mood)fim=e.data;
   }
-  clearInterval(tick);w.remove();
-  const dt=((performance.now()-t0)/1000).toFixed(1);
-  const parts=[];
-  if(out.tipo==='acao')parts.push('ação: '+(out.acao||'?'));
-  parts.push('LLM '+(out.timings?out.timings.llm:dt)+'s');
-  bubble('alice',out.reply,parts.join(' · '));
-  $('#lat').textContent='última resposta: '+dt+'s';
-  if(out.memoria&&out.memoria.salvar&&out.memoria.chave)toast('Memória salva: '+out.memoria.chave+' = '+out.memoria.valor);
-  applyState(out);
+  clearInterval(tick);
+  if(!falas)w.remove();
+  else{
+    const dt=((performance.now()-t0)/1000).toFixed(1);
+    const parts=[];
+    if(acoes.length)parts.push('ação: '+acoes.join(', '));
+    if(ignoradas.length)parts.push('ação ignorada: '+ignoradas.join(', ')+' (você não pediu)');
+    parts.push(fim&&fim.timings&&fim.timings.primeira!=null?'1ª frase '+fim.timings.primeira+'s · total '+fim.timings.total+'s':'resposta em '+dt+'s');
+    setMeta(w,parts.join(' · '));
+    $('#lat').textContent='última resposta: '+dt+'s';
+  }
+  if(erro)bubble('err',erro);
+  if(fim)applyState(fim);
+  await speechQueue;  /* em chamada, só volta a ouvir depois que ela termina de falar */
+  setBusy(false);
 }
 $('#f').onsubmit=e=>{e.preventDefault();send($('#inp').value)};
 
-/* microfone do navegador (aperte e fale) */
+/* microfone: 🎤 = uma frase (navegador); 📞 = chamada contínua (ouve, responde, volta a ouvir).
+   A chamada ouve pelo microfone do PC (Whisper, via servidor) ou, se preferir, pelo navegador. */
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-if(!SR){$('#mic').hidden=true}else{
-  const rec=new SR();rec.lang='pt-BR';rec.interimResults=false;
-  rec.onresult=e=>send(e.results[0][0].transcript);
-  rec.onend=()=>$('#mic').classList.remove('on');
-  $('#mic').onclick=()=>{$('#mic').classList.add('on');try{rec.start()}catch(e){}};
+const FIM_CHAMADA=/^\W*(tchau|desligar|desliga|encerrar|encerra|ate mais|até mais)/i;
+let rec=null,semVoz=0;
+const setStatus=t=>{$('#status').textContent=t||''};
+const usaServidor=()=>S.ouvido&&$('#srvmic').checked&&base()!==null;
+
+function fimChamada(msg,grave){
+  const estava=callOn;callOn=false;
+  try{rec&&rec.abort()}catch(e){}
+  if(estava&&S.ouvido&&base()!==null)call('/ouvir/cancelar','POST',{}).catch(()=>{});
+  $('#call').classList.remove('live');$('#call').title='Chamada: conversa contínua por voz';
+  $('#inp').placeholder='Fala alguma coisa pra Alice...';setStatus('');
+  if(msg){if(grave)bubble('err',msg);else toast(msg)}
 }
+async function loopServidor(){
+  while(callOn){
+    setStatus('🎧 Ouvindo... (diga "tchau" para encerrar)');
+    let t=null;
+    try{t=(await call('/ouvir','POST',{})).texto}
+    catch(e){
+      if(/em uso/.test(e.message)){await sleep(400);continue}
+      fimChamada('Chamada encerrada: '+(e instanceof TypeError?'o servidor não respondeu.':e.message),true);return;
+    }
+    if(!callOn)return;
+    if(!t){continue}
+    setStatus('Ouvi: '+t);
+    if(FIM_CHAMADA.test(t)){fimChamada('Chamada encerrada.');return}
+    await send(t);
+  }
+}
+function ouvirNavegador(){
+  if(!callOn||busy||!rec)return;
+  setStatus('🎧 Ouvindo... (diga "tchau" para encerrar)');
+  try{rec.start()}catch(e){}
+}
+if(!SR){$('#mic').hidden=true}else{
+  rec=new SR();rec.lang='pt-BR';rec.interimResults=true;
+  rec.onresult=async e=>{
+    const r=e.results[e.results.length-1],t=r[0].transcript;
+    if(!r.isFinal){setStatus('Ouvindo: '+t);return}
+    semVoz=0;
+    if(!callOn){send(t);return}
+    setStatus('Ouvi: '+t);
+    if(FIM_CHAMADA.test(t)){fimChamada('Chamada encerrada.');return}
+    await send(t);
+    ouvirNavegador();
+  };
+  rec.onerror=e=>{
+    if(e.error==='aborted')return;
+    if(e.error==='no-speech'){
+      if(callOn&&++semVoz>=3)fimChamada('Chamada encerrada: o navegador não captou nenhuma voz 3 vezes seguidas. Confira o microfone padrão do Windows e a permissão do site (cadeado na barra de endereço). Se o problema continuar, marque "ouvir pelo microfone do PC" no painel.',true);
+      else setStatus('Não captei nenhuma voz. Tentando de novo...');
+      return;
+    }
+    const msg='Microfone do navegador: '+e.error+(e.error==='network'?' (o navegador precisa de internet para reconhecer voz; no Brave isso não funciona)':e.error==='not-allowed'?' (permita o microfone no cadeado da barra de endereço)':'');
+    if(callOn)fimChamada('Chamada encerrada. '+msg,true);else toast(msg);
+  };
+  rec.onend=()=>{$('#mic').classList.remove('on');if(callOn&&!busy&&!usaServidor())setTimeout(ouvirNavegador,250)};
+  $('#mic').onclick=()=>{if(callOn)return;$('#mic').classList.add('on');try{rec.start()}catch(e){}};
+}
+$('#call').onclick=()=>{
+  if(callOn){fimChamada('Chamada encerrada.');return}
+  if(!usaServidor()&&!SR){toast('Sem reconhecimento de voz neste navegador. Use Chrome/Edge ou instale faster-whisper e sounddevice no servidor.');return}
+  callOn=true;semVoz=0;$('#call').classList.add('live');$('#call').title='Encerrar chamada';
+  toast(usaServidor()?'Chamada iniciada pelo microfone do PC. Fale quando quiser.':'Chamada iniciada pelo navegador. Fale quando quiser.');
+  if(usaServidor())loopServidor();else ouvirNavegador();
+};
+
+/* lembretes: a ação "lembrete" dispara no servidor, então a tela consulta de tempos em tempos */
+setInterval(async()=>{
+  if(!online||base()===null)return;
+  try{(await call('/avisos')).avisos.forEach(a=>bubble('note',a))}catch(e){}
+},4000);
 
 async function boot(){
   const c=$('#conn');
-  if(base()===null){c.textContent='Modo demonstração: nada aqui usa o seu código. Rode o server.py e abra http://127.0.0.1:5000 para falar com a Alice de verdade.';renderAll();return}
+  online=false;
+  await loadActions();
+  if(base()===null){
+    S.voz=false;S.ouvido=false;$('#srvmic').disabled=true;$('#call').hidden=!SR;syncStop();
+    c.textContent='Modo demonstração: nada aqui usa o seu código. Rode o server.py e abra http://127.0.0.1:5000 para falar com a Alice de verdade.';renderAll();return}
   try{
-    const st=await call('/state');applyState(st);
-    c.textContent=st.voz?'Conectada ao servidor. Voz do Murf disponível.':'Conectada ao servidor. Voz desativada (chave do Murf não encontrada).';
-  }catch(e){c.textContent='Servidor não respondeu. Rode: python IA/server.py';renderAll()}
+    const st=await call('/state');applyState(st);online=true;S.voz=!!st.voz;S.ouvido=!!st.ouvido;
+    c.textContent=(st.voz?'Conectada ao servidor. Voz do Murf disponível.':'Conectada ao servidor. Voz desativada (chave do Murf não encontrada).')+(st.modelo?' Modelo: '+st.modelo+'.':'');
+  }catch(e){S.voz=false;S.ouvido=false;c.textContent='Servidor não respondeu. Rode: python server.py (dentro da pasta IA)';renderAll()}
+  $('#speak').disabled=!S.voz;
+  $('#srvmic').disabled=!S.ouvido;
+  $('#call').hidden=!(SR||S.ouvido);
+  syncStop();
 }
 emptyState();boot();
 </script>

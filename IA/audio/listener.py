@@ -1,76 +1,90 @@
-import sounddevice as sd
-import numpy as np
-from faster_whisper import WhisperModel
 import time
+from collections import deque
+
+import numpy as np
+import sounddevice as sd
+from faster_whisper import WhisperModel
 
 
 class Listener:
-    def __init__(self):
-        self.model = WhisperModel("small", compute_type="int8")
+    def __init__(self, modelo="small"):
+        self.model = WhisperModel(modelo, compute_type="int8")
         self.samplerate = 16000
-        self.threshold = 0.01  # ajuste isso
-        self.silence_time_limit = 2.0  # segundos de silêncio pra parar
-        self.audio_buffer = []
-        self.last_voice_time = None
-        self.gravando = False
+        self.blocksize = 1600              # blocos de 0,1 s
+        self.threshold = 0.01              # volume mínimo para considerar "voz" (ajuste ao seu microfone)
+        self.silence_time_limit = 1.0      # antes era 2.0: cada segundo aqui é um segundo a menos de espera
+        self.max_segundos = 20             # trava de segurança
+        self.pre_roll_blocos = 4           # guarda 0,4 s antes da voz para não cortar a 1ª sílaba
 
-    def ouvir_som(self):
-        self.audio_buffer = []
-        self.gravando = False
-        self.last_voice_time = None
+    def ouvir_som(self, espera_max=None, cancelar=None):
+        """Grava até o silêncio e transcreve. Devolve None se ninguém falou em `espera_max` segundos
+        ou se o evento `cancelar` for acionado (usado pela chamada na interface web)."""
+        buffer = []
+        pre = deque(maxlen=self.pre_roll_blocos)
+        est = {"gravando": False, "ultima_voz": None, "inicio": None}
 
         print("🎧 Ouvindo...")
+        t_ini = time.time()
 
         def callback(indata, frames, time_info, status):
-            volume = np.sqrt(np.mean(indata**2))
+            volume = np.sqrt(np.mean(indata ** 2))
+            bloco = indata.copy()
 
             if volume > self.threshold:
-                if not self.gravando:
+                if not est["gravando"]:
                     print("🗣 Voz detectada, começando gravação...")
-                    self.gravando = True
-
-                self.audio_buffer.append(indata.copy())
-                self.last_voice_time = time.time()
-
-            elif self.gravando:
-                # ainda grava enquanto não ultrapassar tempo de silêncio
-                self.audio_buffer.append(indata.copy())
+                    est["gravando"] = True
+                    est["inicio"] = time.time()
+                    buffer.extend(pre)  # inclui o trecho logo antes da voz
+                    pre.clear()
+                buffer.append(bloco)
+                est["ultima_voz"] = time.time()
+            elif est["gravando"]:
+                buffer.append(bloco)
+            else:
+                pre.append(bloco)
 
         with sd.InputStream(
             samplerate=self.samplerate,
             channels=1,
             dtype="float32",
-            callback=callback
+            blocksize=self.blocksize,
+            callback=callback,
         ):
             while True:
-                if self.gravando and self.last_voice_time:
-                    tempo_silencio = time.time() - self.last_voice_time
-                    if tempo_silencio > self.silence_time_limit:
+                if cancelar is not None and cancelar.is_set():
+                    return None
+                if not est["gravando"] and espera_max and time.time() - t_ini > espera_max:
+                    return None
+                if est["gravando"]:
+                    agora = time.time()
+                    if agora - est["ultima_voz"] > self.silence_time_limit:
                         print("🤫 Silêncio detectado. Parando gravação.")
                         break
+                    if agora - est["inicio"] > self.max_segundos:
+                        break
+                time.sleep(0.05)
 
-                time.sleep(0.1)
-
-        if not self.audio_buffer:
+        if not buffer:
             return None
 
-        audio_np = np.concatenate(self.audio_buffer).flatten()
-
-        if np.max(np.abs(audio_np)) > 0:
-            audio_np = audio_np / np.max(np.abs(audio_np))
+        audio = np.concatenate(buffer).flatten()
+        pico = np.max(np.abs(audio))
+        if pico > 0:
+            audio = audio / pico
 
         print("🧠 Transcrevendo...")
+        segments, _ = self.model.transcribe(
+            audio,
+            language="pt",
+            beam_size=1,                         # mais rápido, qualidade quase igual para fala curta
+            vad_filter=True,                     # ignora ruído e silêncio
+            condition_on_previous_text=False,
+            initial_prompt="Alice",              # ajuda o Whisper a acertar o nome dela
+        )
 
-        segments, _ = self.model.transcribe(audio_np, language="pt")
-
-        texto_final = ""
-        for segment in segments:
-            texto_final += segment.text + " "
-
-        texto_final = texto_final.strip()
-
-        if texto_final:
-            print("Você disse:", texto_final)
-            return texto_final
-
+        texto = " ".join(s.text.strip() for s in segments).strip()
+        if texto:
+            print("Você disse:", texto)
+            return texto
         return None

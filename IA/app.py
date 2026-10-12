@@ -1,115 +1,100 @@
-from audio.listener import Listener
-from audio.speaker import Speak
-from brain.actions import Think
-from brain.personality import Personality
+"""
+Alice no terminal (voz ou texto). Para a interface web, use o server.py.
+"""
+import re
 import time
 
+from brain.actions import Think
+from brain.personality import Personality
 
-speak = Speak()
-mic = Listener()
-brain = Think(Personality())
+TIMEOUT = 45  # segundos que ela continua ouvindo depois de ser chamada
+CHAMADO = re.compile(r"^\W*alice\b[\s,.!?:;-]*", re.IGNORECASE)  # pega "Alice," "alice!" "Alice:"
 
-ativa = False
-ultimo_uso = 0
-tempo_timeout = 45
+# A voz é opcional: sem a chave do Murf, a Alice responde só no texto.
+speak = None
+try:
+    from audio.speaker import Speak
 
-case = input("deseja conversar por texto ou fala? (t/f)")
+    speak = Speak()
+except Exception as e:
+    print("Voz (Murf) desativada:", e)
 
-if "f" in case.lower():
+
+def notificar(texto):
+    print("\n" + texto)
+    if speak:
+        speak.enfileirar(texto)
+
+
+brain = Think(Personality(), notificar=notificar)
+
+
+def responder(pergunta, falar=True):
+    """Mostra cada frase assim que o LLM a termina e já manda para a voz."""
+    t0 = time.time()
+    primeira = True
+    try:
+        for ev in brain.stream(pergunta):
+            if ev["type"] == "sentence":
+                if primeira:
+                    print(f"(1ª frase em {time.time() - t0:.1f}s)")
+                    primeira = False
+                print("Alice:", ev["text"])
+                if falar and speak:
+                    speak.enfileirar(ev["text"])
+            elif ev["type"] == "acao":
+                print("Ação:", ev["acao"], ev["arg"] or "")
+                print("  ->", brain.executar(ev["acao"], ev["arg"]))
+    except Exception as e:  # ErroLLM já vem com a mensagem explicada
+        print("Erro:", e)
+    if falar and speak:
+        speak.esperar()  # só volta a ouvir quando ela termina, para não se escutar
+
+
+def modo_voz():
+    from audio.listener import Listener  # carrega o Whisper só se for usar a voz
+
+    mic = Listener()
+    ativa = False
+    ultimo_uso = 0.0
+    print("Diga 'Alice' para chamar. Ctrl+C para sair.")
+
     while True:
-        pergunta = mic.ouvir_som()
-
-        if not pergunta:
+        fala = mic.ouvir_som()
+        if not fala:
             continue
 
-        if pergunta and pergunta.lower().startswith("alice"):
+        chamada = CHAMADO.match(fala)
+        if chamada:
             ativa = True
-            ultimo_uso = time.time()
-            pergunta = pergunta.replace("alice", "", 1).strip()
-            print("Áudio gravado!")
-            print("Gerando resposta!!!")
+            fala = fala[chamada.end():].strip()
+        elif ativa and time.time() - ultimo_uso > TIMEOUT:
+            ativa = False
+            print("Modo passivo")
 
-        if not pergunta:
+        if not ativa or not fala:
+            ultimo_uso = time.time() if chamada else ultimo_uso
             continue
 
-        if ativa:
-            if time.time() - ultimo_uso > tempo_timeout:
-                ativa = False
-                print("Modo passivo")
-                continue
+        responder(fala)
+        ultimo_uso = time.time()
 
-            ultimo_uso = time.time()
 
-            start = time.time()
-
-            resposta = brain.generate(pergunta)
-            print("LLM demorou:", time.time() - start)
-
-            # if "faça" in resposta or "abra" in resposta or "abre" in resposta:
-            #     resposta["tipo"] = resposta["acao"]
-            
-            if not resposta:
-                print("Sem resposta válida")
-                continue
-                
-            if resposta["tipo"] == "acao":
-                if not resposta.get("resposta"):
-                    resposta["resposta"] = "Claro!"
-                speak.falar(resposta["resposta"])
-                brain.comandos(resposta)
-            
-            elif resposta["tipo"] == "fala":
-                start = time.time()
-                speak.falar(resposta["resposta"])
-                print("Murf demorou:", time.time() - start)
-
-        # print(resposta)
-        # brain.comandos(pergunta)  # ⚠️ IMPORTANTE (explico abaixo)
-        # if resposta and resposta.strip():
-        #         speak.falar(resposta)
-        # else:
-        #     print("Resposta vazia. Não enviando para TTS.")
-
-case = input("deseja ouvir o que Alice fala? (y/n)")
-if "y" in case:
+def modo_texto():
+    falar = bool(speak) and input("Alice fala as respostas em voz alta? (s/n) ").strip().lower().startswith("s")
+    print("Digite 'sair' para encerrar.")
     while True:
-        pergunta = input("Entre com a pergunta")
-        resposta = brain.generate(pergunta)
-
-        resposta["resposta"] = "abrindo"
-
-        if not resposta:
-            print("Sem resposta válida")
-            continue
-        
-        if  resposta["acao"] == "abrir_youtube":
-            speak.falar(resposta["resposta"])
-            brain.comandos(resposta)
-
-        if  resposta["acao"] == "abrir_navegador":
-            speak.falar(resposta["resposta"])
-            brain.comandos(resposta)
-            
-        if  resposta["acao"] == "abrir_projeto":
-            speak.falar(resposta["resposta"])
-            brain.comandos(resposta)
-        
-        elif resposta["tipo"] == "fala":
-             speak.falar(resposta["resposta"])
-        print(resposta)
+        pergunta = input("Você: ").strip()
+        if pergunta.lower() in ("sair", "exit", "q"):
+            break
+        if pergunta:
+            responder(pergunta, falar)
 
 
-        # brain.comandos(pergunta)  # ⚠️ IMPORTANTE (explico abaixo)
-        # if resposta and resposta.strip():
-        #         speak.falar(resposta)
-        # else:
-        #     print("Resposta vazia. Não enviando para TTS.")
-
-while True:
-    pergunta = input("Entre com a pergunta")
-    resposta = brain.generate(pergunta)
-    if resposta and resposta.strip():
-        print(resposta)
-    else:
-        print("Resposta vazia. Não enviando para TTS.")
-    brain.comandos(pergunta)
+if __name__ == "__main__":
+    brain.aquecer()
+    escolha = input("Deseja conversar por texto ou fala? (t/f) ").strip().lower()
+    try:
+        modo_voz() if escolha.startswith("f") else modo_texto()
+    except KeyboardInterrupt:
+        print("\nAté mais!")
