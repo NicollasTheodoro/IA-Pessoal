@@ -5,7 +5,7 @@ from . import vocabulario as vc
 DIAS = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
 
 
-def build_system_prompt(personality, memories=None, acoes=""):
+def build_system_prompt(personality, memories=None, acoes="", contexto=""):
     """
     A parte FIXA vem primeiro e a parte que muda (humor, memória, hora) vem no fim.
     O Ollama reaproveita o começo do prompt entre as falas, então isso deixa tudo mais rápido.
@@ -21,6 +21,8 @@ COMO RESPONDER (suas frases são lidas em voz alta)
 - Use SOMENTE as ações da lista abaixo. Nunca invente ações.
 - Para guardar um fato duradouro sobre o USUÁRIO (nome, gosto, rotina), use <memoria:chave|valor>. Nunca guarde coisas sobre você nem sobre a conversa.
 - As tags não são faladas e você nunca as explica.
+- Perguntas sobre hora, data, clima, agenda, anotações ou planilhas: responda com as informações das seções abaixo (AGORA, CLIMA, AGENDA, ANOTAÇÕES, RESUMO), sem tag. Se a informação não estiver lá, diga que não sabe; nunca invente.
+- Para agendar, repasse o "quando" exatamente como o usuário falou; o sistema calcula a data.
 
 AÇÕES
 {acoes}
@@ -38,6 +40,14 @@ Usuário: pesquisa receita de brigadeiro
 Alice: Fome de novo? Tá aí. <acao:pesquisar_google|receita de brigadeiro>
 Usuário: me lembra de beber água em 20 minutos
 Alice: Eu aviso. Mas beber é com você. <acao:lembrete|20|beber água>
+Usuário: me avisa amanhã às 9h de ligar pro banco
+Alice: Marcado. Tenta não esquecer de acordar. <acao:agendar|amanhã 9h|ligar pro banco>
+Usuário: comi 150 gramas de arroz cozido no almoço
+Alice: Hum, tá comendo bem. Anotei. <acao:registrar|alimentacao|alimento=arroz;quantidade=150g;preparo=cozido;refeicao=almoço>
+Usuário: ganhei 200 reais num bico hoje
+Alice: Olha o empreendedor. <acao:registrar|financeiro|valor=200;origem=bico;descricao=bico>
+Usuário: pula esse vídeo
+Alice: Pulando. <acao:proxima_musica>
 Usuário: meu aniversário é dia 3 de maio
 Alice: Anotado. Vou fingir que vou lembrar. <memoria:aniversario|3 de maio>
 """
@@ -50,6 +60,9 @@ ESTADO EMOCIONAL: {personality.state}
 Carinho {personality.traits['carinho']}/10, energia {personality.traits['energia']}/10, sarcasmo {personality.traits['sarcasmo']}/10, paciência {personality.traits['paciencia']}/10.
 {build_behavior_instructions(personality)}
 {build_slang_instruction(personality)}"""
+
+    if contexto:
+        variavel += "\n" + contexto + "\n"
 
     if memories:
         variavel += "\nO QUE VOCÊ SABE SOBRE O USUÁRIO:\n"

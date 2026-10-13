@@ -1,0 +1,8 @@
+# dados pessoais: nunca suba para o GitHub
+dados/
+IA/dados/
+falas/
+prints/
+*.db
+__pycache__/
+.env

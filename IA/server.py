@@ -16,22 +16,33 @@ Depois abra http://127.0.0.1:5000
 Variáveis opcionais:
     ALICE_PORTA=5000          porta do servidor
     ALICE_ORIGENS=http://x    outras origens autorizadas a chamar a API (separadas por vírgula)
+
+Acesso pelo celular (veja o LEIAME-CELULAR.md):
+    ALICE_HOST=0.0.0.0        escuta na rede (padrão 127.0.0.1: só este PC)
+    ALICE_TOKEN=uma-senha     OBRIGATÓRIA quando ALICE_HOST não for local. Fora do PC, toda chamada exige essa senha.
 """
 import importlib.util
 import json
 import os
+import hmac
 import threading
 import time
+import urllib.request
 from collections import deque
 from urllib.parse import urlparse
 
 from flask import Flask, Response, jsonify, request, send_from_directory, stream_with_context
+
 
 from brain.actions import Think
 from brain.personality import Personality
 
 PASTA = os.path.dirname(os.path.abspath(__file__))
 PORTA = int(os.getenv("ALICE_PORTA", "5000"))
+HOST = os.getenv("ALICE_HOST", "127.0.0.1")
+TOKEN = os.getenv("ALICE_TOKEN", "")
+NTFY = os.getenv("ALICE_NTFY", "")  # opcional: tópico do ntfy.sh para receber os lembretes como notificação no celular
+LOCAIS = ("127.0.0.1", "::1")
 ORIGENS = {o.strip().rstrip("/") for o in os.getenv("ALICE_ORIGENS", "").split(",") if o.strip()}
 
 app = Flask(__name__, static_folder=os.path.join(PASTA, "static"))
@@ -68,10 +79,20 @@ def carregar_mic():
 avisos = deque(maxlen=50)  # lembretes que dispararam e a interface ainda não mostrou
 
 
+def _push(texto):
+    try:
+        req = urllib.request.Request("https://ntfy.sh/" + NTFY, data=texto.encode("utf-8"), headers={"Title": "Alice"})
+        urllib.request.urlopen(req, timeout=8).close()
+    except Exception as e:
+        print("Notificação no celular falhou:", e)
+
+
 def notificar(texto):
-    """Chamado pela ação 'lembrete' quando o tempo acaba."""
+    """Chamado quando um lembrete/agendamento dispara."""
     print(texto)
     avisos.append(texto)
+    if NTFY:
+        threading.Thread(target=_push, args=(texto,), daemon=True).start()
     if speaker:
         speaker.enfileirar(texto)
 
@@ -102,17 +123,43 @@ def sse(evento, dados):
 
 
 # ---------------------------------------------------------------- segurança
-# O servidor só escuta em 127.0.0.1, mas o navegador deixa QUALQUER site tentar
-# chamar localhost. Como a interface pode abrir programas no PC, só aceitamos
-# chamadas vindas da própria interface.
+# A interface pode abrir programas, tirar print e mexer nas suas planilhas. Por isso:
+#  - do próprio PC (127.0.0.1): só aceita a interface (checa Host e Origin, contra sites maliciosos);
+#  - de outro aparelho (celular): exige a senha ALICE_TOKEN em TODA chamada, menos a página inicial
+#    (que não tem dado nenhum). Erros de senha seguidos bloqueiam o aparelho por 1 minuto.
+falhas = {}  # ip -> (erros, bloqueado_até)
+
+
+def _origem_ok():
+    origem = request.headers.get("Origin")
+    return not origem or urlparse(origem).netloc == request.host or origem.rstrip("/") in ORIGENS
+
+
 @app.before_request
 def proteger():
-    if request.host.split(":")[0] not in ("127.0.0.1", "localhost"):
-        return jsonify(error="Host não permitido."), 403
-    if request.method in ("POST", "PUT", "DELETE"):
-        origem = request.headers.get("Origin")
-        if origem and urlparse(origem).netloc != request.host and origem.rstrip("/") not in ORIGENS:
+    if request.remote_addr in LOCAIS:
+        if request.host.split(":")[0] not in ("127.0.0.1", "localhost"):
+            return jsonify(error="Host não permitido."), 403
+        if request.method in ("POST", "PUT", "DELETE") and not _origem_ok():
             return jsonify(error="Origem não permitida."), 403
+        return None
+    # --- aparelho remoto ---
+    if request.method == "GET" and request.path == "/":
+        return None
+    if not TOKEN:
+        return jsonify(error="Acesso remoto desativado (defina ALICE_TOKEN)."), 403
+    erros, ate = falhas.get(request.remote_addr, (0, 0))
+    if time.time() < ate:
+        return jsonify(error="Muitas tentativas. Espere 1 minuto."), 429
+    enviado = request.headers.get("X-Alice-Token", "")
+    if not hmac.compare_digest(enviado.encode(), TOKEN.encode()):
+        erros += 1
+        falhas[request.remote_addr] = (0, time.time() + 60) if erros >= 8 else (erros, 0)
+        return jsonify(error="Senha incorreta.", auth=True), 401
+    falhas.pop(request.remote_addr, None)
+    if request.method in ("POST", "PUT", "DELETE") and not _origem_ok():
+        return jsonify(error="Origem não permitida."), 403
+    return None
 
 
 @app.after_request
@@ -120,7 +167,7 @@ def cors(resp):
     origem = (request.headers.get("Origin") or "").rstrip("/")
     if origem in ORIGENS:
         resp.headers["Access-Control-Allow-Origin"] = origem
-        resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Alice-Token"
         resp.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,DELETE,OPTIONS"
     return resp
 
@@ -265,7 +312,113 @@ def memory():
     return jsonify(memory=dict(brain.memory.data))
 
 
+# ---------------------------------------------------------------- painel, agenda, planilhas
+def _erro(fn):
+    """Transforma ValueError (dado inválido) em resposta 400 legível."""
+    from functools import wraps
+
+    @wraps(fn)
+    def w(*a, **k):
+        try:
+            return fn(*a, **k)
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
+
+    return w
+
+
+@app.get("/painel")
+def painel():
+    return jsonify(
+        agora=time.strftime("%Y-%m-%dT%H:%M:%S"),
+        clima=brain.clima.dados,
+        agenda=brain.agenda.pendentes(10),
+        resumo=brain.dados.resumo(),
+        cards=list(brain.acoes.cards),
+    )
+
+
+@app.delete("/cards/<int:cid>")
+def apagar_card(cid):
+    brain.acoes.cards = type(brain.acoes.cards)((c for c in brain.acoes.cards if c["id"] != cid), maxlen=20)
+    return jsonify(ok=True)
+
+
+@app.get("/agenda")
+def get_agenda():
+    return jsonify(agenda=brain.agenda.todos())
+
+
+@app.post("/agenda")
+def post_agenda():
+    b = corpo()
+    item, erro = brain.agenda.adicionar_frase(str(b.get("quando", "")), str(b.get("texto", "")))
+    if erro:
+        return jsonify(error=erro), 400
+    return jsonify(item=item)
+
+
+@app.put("/agenda/<int:iid>")
+def put_agenda(iid):
+    return jsonify(ok=brain.agenda.concluir(iid, bool(corpo().get("feito", True))))
+
+
+@app.delete("/agenda/<int:iid>")
+def del_agenda(iid):
+    return jsonify(ok=brain.agenda.remover(iid))
+
+
+@app.get("/tabelas")
+def get_tabelas():
+    return jsonify(tabelas=brain.dados.esquema())
+
+
+@app.get("/tabelas/<nome>")
+@_erro
+def get_tabela(nome):
+    return jsonify(linhas=brain.dados.listar(nome, request.args.get("limite", 300, type=int)))
+
+
+@app.post("/tabelas/<nome>")
+@_erro
+def post_tabela(nome):
+    msg = brain.acoes.registrar_campos(nome, corpo().get("valores") or {})
+    if not msg.startswith("Registrado"):
+        return jsonify(error=msg), 400
+    return jsonify(ok=True, mensagem=msg)
+
+
+@app.put("/tabelas/<nome>/<int:lid>")
+@_erro
+def put_tabela(nome, lid):
+    return jsonify(ok=brain.dados.atualizar(nome, lid, corpo().get("valores") or {}))
+
+
+@app.delete("/tabelas/<nome>/<int:lid>")
+@_erro
+def del_tabela(nome, lid):
+    return jsonify(ok=brain.dados.remover(nome, lid))
+
+
+@app.get("/grafico/<nome>")
+@_erro
+def grafico(nome):
+    a = request.args
+    return jsonify(brain.dados.grafico(nome, a.get("y"), a.get("agg"), a.get("periodo"), a.get("por"), a.get("dias", 120, type=int)))
+
+
+@app.get("/export/<nome>")
+@_erro
+def exportar(nome):
+    nome_ok, _ = brain.dados._tabela(nome)
+    return Response(brain.dados.csv(nome_ok), mimetype="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f"attachment; filename={nome_ok}.csv"})
+
+
 if __name__ == "__main__":
+    if HOST not in LOCAIS + ("localhost",) and not TOKEN:
+        raise SystemExit("ALICE_HOST aberto para a rede exige ALICE_TOKEN (uma senha). Veja o LEIAME-CELULAR.md.")
+
     def aquecer():
         with lock_chat:  # se o aquecimento rodar junto com a 1ª conversa, o Ollama recarrega o modelo duas vezes
             brain.aquecer()
@@ -277,6 +430,6 @@ if __name__ == "__main__":
                 print("Microfone do PC indisponível:", e)
 
     threading.Thread(target=aquecer, daemon=True).start()  # 1ª resposta bem mais rápida
-    print(f"Alice no ar: http://127.0.0.1:{PORTA}")
-    # 127.0.0.1: só o seu PC acessa. A interface pode disparar ações no computador.
-    app.run(host="127.0.0.1", port=PORTA, debug=False, threaded=True)
+    print(f"Alice no ar: http://127.0.0.1:{PORTA}" + ("  (aberta para a rede, com senha)" if TOKEN and HOST not in LOCAIS else ""))
+    # Por padrão 127.0.0.1: só o seu PC acessa. A interface pode disparar ações no computador.
+    app.run(host=HOST, port=PORTA, debug=False, threaded=True)

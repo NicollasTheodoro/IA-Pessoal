@@ -3,7 +3,10 @@ import time
 
 from ollama import chat
 
-from brain.acoes import Acoes
+from brain.acoes import PASTA_DADOS, Acoes
+from brain.agenda import Agenda
+from brain.clima import Clima
+from brain.dados import Dados
 from brain.memory import PersistentMemory
 from brain.prompt_builder import build_system_prompt
 from brain.stream import StreamParser
@@ -16,7 +19,7 @@ OPCOES = {
     "num_predict": 160,   # respostas curtas: são faladas em voz alta
     "temperature": 0.7,
     "top_p": 0.9,
-    "num_ctx": 3072,      # contexto menor também gasta menos memória
+    "num_ctx": 4096,      # o prompt agora leva agenda, clima e resumo; 4096 evita cortar o começo
 }
 
 # Padrão: roda o modelo na CPU (num_gpu=0). Placas antigas ou integradas (ex.: GT 740, Intel UHD)
@@ -41,13 +44,17 @@ class Think:
         self.model = modelo
         self.messages = []
         self.memory = PersistentMemory()
-        self.acoes = Acoes(notificar)
+        pasta = os.path.join(PASTA_DADOS, "dados")
+        self.agenda = Agenda(pasta, notificar)
+        self.dados = Dados(pasta)
+        self.clima = Clima()
+        self.acoes = Acoes(notificar, self.agenda, self.dados, self.clima, llm=self._json_llm)
 
     # ------------------------------------------------------------------
     def stream(self, user_input):
         """Gera eventos conforme o modelo escreve (veja brain/stream.py)."""
         self.personalidade.update_from_interaction(user_input)
-        sistema = build_system_prompt(self.personalidade, self.memory.data, self.acoes.descricoes())
+        sistema = build_system_prompt(self.personalidade, self.memory.data, self.acoes.descricoes(), self.contexto())
         msgs = [
             {"role": "system", "content": sistema},
             *self.messages,
@@ -88,6 +95,28 @@ class Think:
                 {"role": "assistant", "content": resposta},
             ]
             self.messages = self.messages[-MAX_MENSAGENS:]
+
+    def contexto(self):
+        """O que a Alice 'sabe' agora: clima, agenda, anotações e resumo das planilhas (tudo curto)."""
+        blocos = []
+        try:
+            for titulo, texto in (
+                ("CLIMA", self.clima.resumo_prompt()),
+                ("AGENDA (próximos avisos)", self.agenda.resumo_prompt(5)),
+                ("ANOTAÇÕES RECENTES", "\n".join("- " + n for n in self.acoes.notas_recentes(6))),
+                ("RESUMO DAS PLANILHAS", self.dados.resumo_prompt()),
+            ):
+                if texto:
+                    blocos.append(f"{titulo}:\n{texto}")
+        except Exception as e:  # um erro aqui nunca pode derrubar a conversa
+            print("Contexto incompleto:", e)
+        return "\n".join(blocos)
+
+    def _json_llm(self, prompt):
+        """Chamada única e sem histórico, usada só para estimar macros de alimentos fora da tabela."""
+        r = chat(model=self.model, messages=[{"role": "user", "content": prompt}], format="json",
+                 options={"num_predict": 120, "temperature": 0.1, **CARGA}, keep_alive=KEEP_ALIVE)
+        return r["message"]["content"]
 
     def executar(self, acao, arg=None):
         return self.acoes.executar(acao, arg)
