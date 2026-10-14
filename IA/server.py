@@ -41,7 +41,7 @@ PASTA = os.path.dirname(os.path.abspath(__file__))
 PORTA = int(os.getenv("ALICE_PORTA", "5000"))
 HOST = os.getenv("ALICE_HOST", "127.0.0.1")
 TOKEN = os.getenv("ALICE_TOKEN", "")
-NTFY = os.getenv("ALICE_NTFY", "")  # opcional: tópico do ntfy.sh para receber os lembretes como notificação no celular
+NTFY = os.getenv("ALICE_NTFY", "alice-personalai")  # opcional: tópico do ntfy.sh para receber os lembretes como notificação no celular
 LOCAIS = ("127.0.0.1", "::1")
 ORIGENS = {o.strip().rstrip("/") for o in os.getenv("ALICE_ORIGENS", "").split(",") if o.strip()}
 
