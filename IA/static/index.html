@@ -17,7 +17,41 @@ button{cursor:pointer}
 .app{display:grid;grid-template-columns:330px 1fr;height:100%}
 aside{background:var(--panel);border-right:1px solid var(--line);overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:22px}
 .who{display:flex;gap:14px;align-items:center}
-.face{width:64px;height:64px;border-radius:50%;background:var(--face);display:grid;place-items:center;font-size:34px;border:2px solid var(--ink);box-shadow:4px 4px 0 var(--sun);flex:none;transition:background .3s}
+.avatar{position:relative;width:104px;height:104px;border-radius:26px;background:var(--face);border:2px solid var(--ink);box-shadow:4px 4px 0 var(--sun);flex:none;transition:background .5s;cursor:pointer;user-select:none}
+.avatar .mov{position:absolute;inset:0;transform-origin:50% 100%}
+.avatar .pp{position:absolute;inset:0;transform-origin:50% 100%}
+.avatar .pp.pop{animation:pop .32s ease-out}
+.avatar img{position:absolute;left:50%;bottom:-2px;width:118px;height:118px;transform:translateX(-50%);object-fit:contain;transition:opacity .22s;pointer-events:none}
+.avatar .parts{position:absolute;inset:0;pointer-events:none}
+.parts .p{position:absolute;font-size:18px;animation:flutuar 2.3s ease-out forwards;text-shadow:0 1px 2px #0006}
+@keyframes flutuar{0%{opacity:0;transform:translate(0,0) scale(.6)}15%{opacity:1}100%{opacity:0;transform:translate(var(--dx),-64px) scale(1.15)}}
+@keyframes pop{0%{transform:scale(.9,1.08)}55%{transform:scale(1.07,.96)}100%{transform:scale(1)}}
+@keyframes m-respirar{0%,100%{transform:scale(1,1)}50%{transform:scale(1.012,1.026)}}
+@keyframes m-inclinar{0%,100%{transform:rotate(-3deg)}50%{transform:rotate(3deg)}}
+@keyframes m-pular_leve{0%,100%{transform:translateY(0)}50%{transform:translateY(-5%)}}
+@keyframes m-pular{0%,100%{transform:translateY(0) scale(1.03,.96)}45%{transform:translateY(-13%) scale(.97,1.04)}}
+@keyframes m-balancar{0%,100%{transform:rotate(-4deg)}50%{transform:rotate(4deg)}}
+@keyframes m-tremer{0%,100%{transform:translateX(-1.6%)}50%{transform:translateX(1.6%)}}
+@keyframes m-tremer_leve{0%,100%{transform:translateX(-.7%)}50%{transform:translateX(.7%)}}
+@keyframes m-cochilar{0%,100%{transform:rotate(-1deg) translateY(0)}50%{transform:rotate(4deg) translateY(2%)}}
+@keyframes m-esticar{0%,100%{transform:scaleY(1)}50%{transform:scaleY(1.07)}}
+@keyframes m-encolher{0%,100%{transform:scale(.97) translateY(1%)}50%{transform:scale(.945) translateY(2%)}}
+.m-respirar{animation:m-respirar 3.4s ease-in-out infinite}
+.m-inclinar{animation:m-inclinar 3.2s ease-in-out infinite}
+.m-pular_leve{animation:m-pular_leve 1s ease-in-out infinite}
+.m-pular{animation:m-pular .6s ease-in-out infinite}
+.m-balancar{animation:m-balancar 1.7s ease-in-out infinite}
+.m-tremer{animation:m-tremer .12s linear infinite}
+.m-tremer_leve{animation:m-tremer_leve .2s linear infinite}
+.m-cochilar{animation:m-cochilar 3.8s ease-in-out infinite}
+.m-esticar{animation:m-esticar 1.5s ease-in-out infinite}
+.m-encolher{animation:m-encolher 2.4s ease-in-out infinite}
+@media(prefers-reduced-motion:reduce){.avatar .mov,.avatar .pp,.parts .p{animation:none!important}}
+.emos{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.emos button{background:none;border:1px solid var(--line);border-radius:99px;padding:4px 10px;font-size:12.5px}
+.emos button.on{background:var(--pink);color:var(--on-pink);border-color:var(--ink);font-weight:600}
+details>summary{cursor:pointer;font:700 16px var(--display);list-style:none}
+details>summary::before{content:'▸ '}details[open]>summary::before{content:'▾ '}
 .who h1{font:800 28px/1 var(--display);margin:0}
 .who p{margin:4px 0 0;color:var(--dim);font-size:13px}
 h2{font:700 16px var(--display);margin:0 0 8px}
@@ -122,7 +156,10 @@ aside.open{transform:none}
 <div class="app">
 <aside id="side">
   <div class="who">
-    <div class="face" id="face">😐</div>
+    <div class="avatar" id="avatar" title="Clique para cutucar a Alice" role="img" aria-label="Alice">
+      <div class="mov m-respirar" id="mov"><div class="pp" id="pp"><img id="spA" alt=""><img id="spB" alt="" style="opacity:0"></div></div>
+      <div class="parts" id="parts"></div>
+    </div>
     <div><h1>Alice</h1><p id="state">Neutra</p></div>
   </div>
 
@@ -130,6 +167,16 @@ aside.open{transform:none}
     <h2>Personalidade</h2>
     <div id="traits"></div>
     <p class="hint">Sobem e descem conforme o que você diz. Mexa nos controles para testar os estados: neutra, animada, irritada e carente.</p>
+  </section>
+
+  <section>
+    <details id="dexp">
+      <summary>Expressões</summary>
+      <p class="hint">Clique para ver cada uma. Sozinha, a Alice troca de expressão conforme o assunto, o humor e o tempo parada.</p>
+      <div class="emos" id="emos"></div>
+      <label class="hint" for="ritmo" style="display:block;margin-top:10px">Ritmo das expressões quando ela está parada</label>
+      <select id="ritmo"><option value="0">Parada (só reage)</option><option value="2">Calma</option><option value="1" selected>Normal</option><option value="0.6">Animada</option></select>
+    </details>
   </section>
 
   <section>
@@ -192,6 +239,8 @@ aside.open{transform:none}
 
 <script>
 const $=s=>document.querySelector(s);
+const MOOD2EMO={neutral:'neutra',excited:'feliz',irritated:'irritada',needy:'carente'};
+let PET_VIVO=false;
 const MOODS={neutral:{n:'Neutra',f:'😐',c:'#ff5c93'},excited:{n:'Animada',f:'🤩',c:'#ffd95a'},irritated:{n:'Irritada',f:'😤',c:'#ff7a45'},needy:{n:'Carente',f:'🥺',c:'#b79bff'}};
 const TRAITS={carinho:'Carinho',energia:'Energia',sarcasmo:'Sarcasmo',paciencia:'Paciência'};
 const BASE={carinho:7,energia:5,sarcasmo:4,paciencia:3};
@@ -255,9 +304,7 @@ function applyState(st){
   renderAll();
 }
 function renderAll(){
-  const m=MOODS[S.mood]||MOODS.neutral;
-  $('#face').textContent=m.f;$('#state').textContent=m.n;
-  document.documentElement.style.setProperty('--face',m.c);
+  if(!PET_VIVO)setEmo(MOOD2EMO[S.mood]||'neutra'); // sem servidor: o humor dos controles escolhe a expressão
   renderTraits();renderMem();
 }
 function renderTraits(){
@@ -760,6 +807,75 @@ function desenharGrafico(d){
   return wrap;
 }
 window.VIEW='chat';
+
+/* ================= expressões da Alice (sprites, movimento, partículas) ================= */
+let CAT={"neutra": {"rotulo": "Neutra", "sprite": "seria", "mov": "respirar", "part": [], "cor": "#ff5c93"}, "desconfiada": {"rotulo": "Desconfiada", "sprite": "seria", "mov": "inclinar", "part": [], "cor": "#9b8cc4"}, "feliz": {"rotulo": "Animada", "sprite": "piscadinha", "mov": "pular_leve", "part": ["✨"], "cor": "#ffd95a"}, "brincalhona": {"rotulo": "Brincalhona", "sprite": "piscadinha", "mov": "balancar", "part": ["♪"], "cor": "#ff9ad5"}, "vitoria": {"rotulo": "Vitoriosa", "sprite": "vitoria", "mov": "pular", "part": ["🎉", "✨"], "cor": "#ffd95a"}, "apaixonada": {"rotulo": "Apaixonada", "sprite": "encantada", "mov": "balancar", "part": ["♥"], "cor": "#ff7ab8"}, "ideia": {"rotulo": "Ideia!", "sprite": "ideia", "mov": "pular_leve", "part": ["💡"], "cor": "#7ad7ff"}, "irritada": {"rotulo": "Irritada", "sprite": "irritada", "mov": "tremer", "part": [], "cor": "#ff7a45"}, "entediada": {"rotulo": "Entediada", "sprite": "entediada", "mov": "respirar", "part": [], "cor": "#8f86a8"}, "confusa": {"rotulo": "Confusa", "sprite": "entediada", "mov": "inclinar", "part": ["❓"], "cor": "#a8a0c8"}, "sonolenta": {"rotulo": "Sonolenta", "sprite": "sonolenta", "mov": "cochilar", "part": [], "cor": "#6f78c9"}, "dormindo": {"rotulo": "Dormindo", "sprite": "sonolenta", "mov": "cochilar", "part": ["💤"], "cor": "#4f5aa8"}, "espreguicando": {"rotulo": "Espreguiçando", "sprite": "espreguicando", "mov": "esticar", "part": [], "cor": "#ffb07a"}, "timida": {"rotulo": "Tímida", "sprite": "timida", "mov": "encolher", "part": [], "cor": "#ffa6c9"}, "choramingando": {"rotulo": "Chorosa", "sprite": "timida", "mov": "tremer_leve", "part": ["💧"], "cor": "#8ab6ff"}, "carente": {"rotulo": "Carente", "sprite": "timida", "mov": "balancar", "part": ["♥"], "cor": "#b79bff"}};
+const sprBase=()=>base()===null?'pet/':base()+'/static/pet/';
+let EMO=null,SPR_ATUAL='A',PART_TIMER=null;
+function setEmo(nome,reanima){
+  const c=CAT[nome];if(!c)return;
+  const mudou=nome!==EMO;if(!mudou&&!reanima)return;
+  const antes=EMO?CAT[EMO]:null;EMO=nome;
+  $('#state').textContent=c.rotulo;
+  document.documentElement.style.setProperty('--face',c.cor);
+  if(!antes||antes.sprite!==c.sprite){
+    const novo=SPR_ATUAL==='A'?$('#spB'):$('#spA'),velho=SPR_ATUAL==='A'?$('#spA'):$('#spB');
+    novo.onload=()=>{novo.style.opacity=1;velho.style.opacity=0};
+    novo.src=sprBase()+c.sprite+'.png';
+    SPR_ATUAL=SPR_ATUAL==='A'?'B':'A';
+  }
+  $('#mov').className='mov m-'+c.mov;
+  const pp=$('#pp');pp.classList.remove('pop');void pp.offsetWidth;pp.classList.add('pop');
+  document.querySelectorAll('#emos button').forEach(b=>b.classList.toggle('on',b.dataset.n===nome));
+  clearInterval(PART_TIMER);
+  if(c.part&&c.part.length){const solta=()=>soltar(c.part[Math.floor(Math.random()*c.part.length)]);setTimeout(solta,250);PART_TIMER=setInterval(solta,1500)}
+}
+function soltar(ch){
+  const box=$('#parts');if(!box||document.hidden)return;
+  const s=document.createElement('span');s.className='p';s.textContent=ch;
+  s.style.left=(15+Math.random()*60)+'%';s.style.top=(4+Math.random()*22)+'%';s.style.setProperty('--dx',(Math.random()*40-20)+'px');
+  box.append(s);setTimeout(()=>s.remove(),2400);
+}
+(function montarExpressoes(){
+  const box=$('#emos');
+  Object.keys(CAT).forEach(n=>{
+    const b=el('button',null,CAT[n].rotulo);b.dataset.n=n;
+    b.onclick=async()=>{if(base()===null||!PET_VIVO){setEmo(n,true);return}try{await call('/pet/definir','POST',{nome:n,dur:10})}catch(e){toast(e.message)}};
+    box.append(b);
+  });
+  $('#avatar').onclick=async()=>{
+    if(base()===null||!PET_VIVO){const k=Object.keys(CAT);setEmo(k[Math.floor(Math.random()*k.length)],true);return}
+    try{await call('/pet/toque','POST')}catch(e){toast(e.message)}
+  };
+  $('#ritmo').onchange=async e=>{if(base()===null||!PET_VIVO)return;try{await call('/pet/ritmo','POST',{ritmo:+e.target.value})}catch(x){toast(x.message)}};
+})();
+
+/* eventos do servidor: expressão sozinha e uma emoção por frase, sem pisca-pisca (fila com ritmo) */
+let EV_ID=null,FILA=[],OCUPADO_ATE=0,PET_PAROU=false;
+async function pollPet(){
+  if(base()===null||document.hidden||PET_PAROU)return;
+  try{
+    const r=await fetch(base()+'/pet/eventos'+(EV_ID==null?'':'?desde='+EV_ID),{headers:hdrs()});
+    if(r.status===401||r.status===403){PET_PAROU=true;return}   // sem senha: não insiste (e não enche a tela de avisos)
+    if(!r.ok)throw 0;
+    const j=await r.json();
+    if(j.estado||j.atual){if(!PET_VIVO){PET_VIVO=true;try{const c=await (await fetch(base()+'/pet/catalogo',{headers:hdrs()})).json();if(c.emocoes)CAT=c.emocoes}catch(e){}}}
+    if(EV_ID==null||j.ultimo<EV_ID){EV_ID=j.ultimo;FILA=[];setEmo(j.atual.nome)}   // 1ª vez ou servidor reiniciou
+    else{
+      j.eventos.forEach(ev=>{if(ev.tipo==='fala'||ev.tipo==='emocao')FILA.push(ev)});
+      EV_ID=j.ultimo;
+      while(FILA.length>6)FILA.shift();
+    }
+  }catch(e){}
+}
+setInterval(pollPet,700);
+setInterval(()=>{
+  const agora=Date.now();if(!FILA.length||agora<OCUPADO_ATE)return;
+  const ev=FILA.shift(),nome=ev.emocao||ev.nome;
+  setEmo(nome,ev.fonte==='toque'||ev.fonte==='manual'||ev.tipo==='fala');
+  OCUPADO_ATE=agora+(ev.tipo==='fala'?Math.max(1200,Math.min(ev.dur*1000,6000)):600);
+},150);
+$('#tok').addEventListener('change',()=>{PET_PAROU=false;EV_ID=null});
 emptyState();boot();
 </script>
 </body>

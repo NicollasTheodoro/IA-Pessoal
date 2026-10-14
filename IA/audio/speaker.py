@@ -39,11 +39,12 @@ class Speak:
         threading.Thread(target=self._tocar_loop, daemon=True).start()
 
     # ---------- API pública ----------
-    def enfileirar(self, texto):
-        """Não bloqueia: manda sintetizar e toca quando chegar a vez."""
+    def enfileirar(self, texto, ao_iniciar=None):
+        """Não bloqueia: manda sintetizar e toca quando chegar a vez.
+        ao_iniciar: função chamada no instante em que ESTA frase começa a tocar (sincroniza a expressão)."""
         texto = (texto or "").strip()
         if texto:
-            self._fila.put(self._pool.submit(self._sintetizar, texto))
+            self._fila.put((self._pool.submit(self._sintetizar, texto), ao_iniciar))
 
     def esperar(self):
         """Bloqueia até tudo que foi enfileirado terminar de tocar."""
@@ -58,7 +59,7 @@ class Speak:
         """Interrompe a fala atual e descarta o que estava na fila."""
         try:
             while True:
-                fut = self._fila.get_nowait()
+                fut, _ = self._fila.get_nowait()
                 fut.cancel()
                 self._fila.task_done()
         except queue.Empty:
@@ -87,16 +88,29 @@ class Speak:
 
     def _tocar_loop(self):
         while True:
-            fut = self._fila.get()
+            fut, ao_iniciar = self._fila.get()
             caminho = None
+            chamou = False
+
+            def avisar():
+                nonlocal chamou
+                if ao_iniciar and not chamou:
+                    chamou = True
+                    try:
+                        ao_iniciar()
+                    except Exception as e:  # um erro na interface nunca pode calar a Alice
+                        print("Erro no gancho da fala:", e)
+
             try:
                 caminho = fut.result()
                 pygame.mixer.music.load(caminho)
                 pygame.mixer.music.play()
+                avisar()
                 while pygame.mixer.music.get_busy():
                     pygame.time.wait(50)
             except Exception as e:
                 print("Erro na voz:", e)
+                avisar()  # sem áudio, o texto e a expressão ainda aparecem no pet
             finally:
                 try:
                     pygame.mixer.music.unload()

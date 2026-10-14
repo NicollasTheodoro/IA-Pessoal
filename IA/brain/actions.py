@@ -49,6 +49,7 @@ class Think:
         self.dados = Dados(pasta)
         self.clima = Clima()
         self.acoes = Acoes(notificar, self.agenda, self.dados, self.clima, llm=self._json_llm)
+        self.emocoes = None  # o servidor liga o motor de emoções aqui (brain/emocoes.py)
 
     # ------------------------------------------------------------------
     def stream(self, user_input):
@@ -64,9 +65,19 @@ class Think:
         parser = StreamParser()
         teve_acao = False
         tags = []  # só as tags que valeram: é o que vai para o histórico
+        frases = []  # frases com a tag de emoção que o modelo deu a elas (também vão para o histórico)
+        emo_pend = None  # <emo:x> lida e ainda não usada: vale para a próxima frase
 
         def tratar(ev):
-            nonlocal teve_acao
+            nonlocal teve_acao, emo_pend
+            if ev["type"] == "emo":
+                if emo_pend is None:  # frases curtas se juntam: vale a emoção do começo
+                    emo_pend = ev["nome"]
+                return None  # a tag não vai para a interface; a emoção vai junto da frase
+            if ev["type"] == "sentence":
+                ev = dict(ev, emo=emo_pend)
+                frases.append((f"<emo:{emo_pend}> " if emo_pend else "") + ev["text"])
+                emo_pend = None
             if ev["type"] == "acao":
                 if not self.acoes.permitida(ev["acao"], user_input):
                     print(f"Ação ignorada (você não pediu): {ev['acao']}")
@@ -79,17 +90,22 @@ class Think:
 
         for token in self._chat_stream(msgs):
             for ev in parser.feed(token):
-                yield tratar(ev)
+                saida = tratar(ev)
+                if saida:
+                    yield saida
         for ev in parser.flush():
-            yield tratar(ev)
+            saida = tratar(ev)
+            if saida:
+                yield saida
 
         if not parser.falas and teve_acao:
-            yield {"type": "sentence", "text": "Pronto."}
+            yield {"type": "sentence", "text": "Pronto.", "emo": None}
             parser.falas.append("Pronto.")
+            frases.append("Pronto.")
 
         if parser.falas:  # só entra no histórico se a Alice realmente respondeu
             # Sem as tags ignoradas: senão o modelo aprende com os próprios erros e repete.
-            resposta = " ".join(parser.falas + tags)
+            resposta = " ".join((frases or parser.falas) + tags)
             self.messages += [
                 {"role": "user", "content": user_input},
                 {"role": "assistant", "content": resposta},
@@ -100,6 +116,8 @@ class Think:
         """O que a Alice 'sabe' agora: clima, agenda, anotações e resumo das planilhas (tudo curto)."""
         blocos = []
         try:
+            if self.emocoes:
+                blocos.append("COMO VOCÊ ESTÁ AGORA: " + self.emocoes.humor_para_prompt())
             for titulo, texto in (
                 ("CLIMA", self.clima.resumo_prompt()),
                 ("AGENDA (próximos avisos)", self.agenda.resumo_prompt(5)),

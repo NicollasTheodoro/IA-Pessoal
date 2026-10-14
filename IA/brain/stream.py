@@ -12,10 +12,11 @@ Eventos gerados:
     {"type": "sentence", "text": "..."}
     {"type": "acao", "acao": "nome", "arg": "..." | None}
     {"type": "memoria", "chave": "...", "valor": "..."}
+    {"type": "emo", "nome": "feliz"}      <- tag <emo:feliz>: expressão da PRÓXIMA frase (veja brain/emocoes.py)
 """
 import re
 
-TAG = re.compile(r"<\s*(acao|memoria)\s*:\s*([^<>]*?)\s*>", re.IGNORECASE)
+TAG = re.compile(r"<\s*(acao|memoria|emo)\s*:\s*([^<>]*?)\s*>", re.IGNORECASE)
 FIM_DE_FRASE = re.compile(r"(?<=[.!?…])\s+|\n+")
 MIN_CHARS = 18  # frases menores se juntam à próxima (menos chamadas de voz)
 
@@ -56,6 +57,9 @@ class StreamParser:
             tag, self.buf = self.buf[: j + 1], self.buf[j + 1:]
             ev = self._tag(tag)
             if ev:
+                if ev["type"] == "emo":
+                    # a emoção vale para o que vem DEPOIS: fecha antes as frases que já terminaram
+                    eventos += self._frases(False)
                 eventos.append(ev)
         eventos += self._frases(final)
         return eventos
@@ -68,6 +72,8 @@ class StreamParser:
         partes = [p.strip() for p in m.group(2).split("|")]
         if tipo == "acao" and partes[0]:
             return {"type": "acao", "acao": partes[0].lower(), "arg": "|".join(partes[1:]) or None}
+        if tipo == "emo" and partes[0]:
+            return {"type": "emo", "nome": partes[0].lower()}
         if tipo == "memoria" and len(partes) >= 2 and partes[0]:
             return {"type": "memoria", "chave": partes[0], "valor": "|".join(partes[1:])}
         return None
@@ -94,6 +100,6 @@ class StreamParser:
         return saida
 
     def _fala(self, texto):
-        texto = texto.replace("*", "").strip()
+        texto = re.sub(r"\s+", " ", texto.replace("*", "")).strip()
         self.falas.append(texto)
         return {"type": "sentence", "text": texto}

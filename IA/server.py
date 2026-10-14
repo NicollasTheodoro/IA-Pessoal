@@ -35,13 +35,14 @@ from flask import Flask, Response, jsonify, request, send_from_directory, stream
 
 
 from brain.actions import Think
+from brain.emocoes import MOVIMENTOS, Emocoes, catalogo as catalogo_emocoes
 from brain.personality import Personality
 
 PASTA = os.path.dirname(os.path.abspath(__file__))
 PORTA = int(os.getenv("ALICE_PORTA", "5000"))
 HOST = os.getenv("ALICE_HOST", "127.0.0.1")
 TOKEN = os.getenv("ALICE_TOKEN", "")
-NTFY = os.getenv("ALICE_NTFY", "alice-personalai")  # opcional: tópico do ntfy.sh para receber os lembretes como notificação no celular
+NTFY = os.getenv("ALICE_NTFY", "")  # opcional: tópico do ntfy.sh para receber os lembretes como notificação no celular
 LOCAIS = ("127.0.0.1", "::1")
 ORIGENS = {o.strip().rstrip("/") for o in os.getenv("ALICE_ORIGENS", "").split(",") if o.strip()}
 
@@ -77,6 +78,7 @@ def carregar_mic():
 
 # ---------------------------------------------------------------- cérebro
 avisos = deque(maxlen=50)  # lembretes que dispararam e a interface ainda não mostrou
+emo = None  # motor de emoções (criado junto com o cérebro, mais abaixo)
 
 
 def _push(texto):
@@ -91,6 +93,8 @@ def notificar(texto):
     """Chamado quando um lembrete/agendamento dispara."""
     print(texto)
     avisos.append(texto)
+    if emo:
+        emo.on_aviso(texto)
     if NTFY:
         threading.Thread(target=_push, args=(texto,), daemon=True).start()
     if speaker:
@@ -99,6 +103,10 @@ def notificar(texto):
 
 personalidade = Personality()
 brain = Think(personalidade, notificar=notificar)
+# Expressões: ritmo 1 = normal, 2 = mais calma, 0.6 = mais agitada, 0 = parada (só reage)
+emo = Emocoes(personalidade, ritmo=float(os.getenv("ALICE_EMO_RITMO", "1") or 1))
+brain.emocoes = emo
+emo.iniciar()
 
 # O Ollama e o histórico da Alice não são thread-safe: uma conversa por vez.
 lock_chat = threading.Lock()
@@ -111,6 +119,7 @@ def estado():
         "mood": personalidade.state,
         "traits": dict(personalidade.traits),
         "memory": dict(brain.memory.data),
+        "expressao": emo.estado(),
     }
 
 
@@ -205,6 +214,7 @@ def chat():
 
     falar = bool(body.get("speak")) and speaker is not None
     rodar = bool(body.get("run_actions"))
+    emo.on_usuario(msg)  # ela já reage à sua mensagem, antes mesmo de o modelo responder
 
     def gerar():
         t0 = time.time()
@@ -219,18 +229,27 @@ def chat():
                         teve_fala = True
                         if primeira is None:
                             primeira = round(time.time() - t0, 2)
+                        # cada frase leva a sua emoção; ela vira expressão quando a frase COMEÇA a ser falada
+                        emocao = emo.escolher_frase(ev["text"], ev.get("emo"))
+                        ev = dict(ev, emocao=emocao)
+                        ao_falar = lambda t=ev["text"], e=emocao: emo.emitir_fala(t, e)  # noqa: E731
                         if falar:
-                            speaker.enfileirar(ev["text"])  # não trava: toca enquanto o LLM continua
+                            speaker.enfileirar(ev["text"], ao_falar)  # não trava: toca enquanto o LLM continua
+                        else:
+                            ao_falar()
                     elif ev["type"] == "acao":
                         ev = dict(ev, executada=rodar)
                         if rodar:
                             ev["resultado"] = brain.executar(ev["acao"], ev["arg"])
+                            emo.on_acao(not str(ev["resultado"]).startswith(("Falhou", "Não ", "Nao ")))
                     yield sse(ev["type"], ev)
             except Exception as e:  # ErroLLM (Ollama fora do ar, modelo ausente...) ou falha inesperada
+                emo.on_acao(False)  # fica confusa
                 yield sse("erro", {"error": str(e) or e.__class__.__name__})
             else:
                 if not teve_fala:
                     yield sse("erro", {"error": "A Alice não respondeu. Tente de novo."})
+            emo.on_fim_resposta()
             yield sse("fim", {"timings": {"primeira": primeira, "total": round(time.time() - t0, 2)}, **estado()})
             if falar and teve_fala:
                 speaker.esperar()  # a chamada só volta a ouvir quando a Alice termina de falar
@@ -279,6 +298,7 @@ def action():
     if nome not in brain.acoes.registro:  # lista fechada: só o que existe em acoes.py
         return jsonify(error="Ação desconhecida."), 400
     resultado = brain.executar(nome, body.get("arg"))
+    emo.on_acao(not str(resultado).startswith(("Falhou", "Não ", "Nao ")))
     return jsonify(ok=True, resultado=resultado)
 
 
@@ -310,6 +330,60 @@ def memory():
             brain.memory.data.pop(key, None)
             brain.memory.save()
     return jsonify(memory=dict(brain.memory.data))
+
+
+# ---------------------------------------------------------------- desktop pet e expressões
+# A interface web e o pet (pet.py) leem os MESMOS eventos: expressão, fala (frase + emoção) e aviso.
+@app.get("/pet/catalogo")
+def pet_catalogo():
+    return jsonify(emocoes=catalogo_emocoes(), movimentos=list(MOVIMENTOS), estado=emo.estado())
+
+
+@app.get("/pet/eventos")
+def pet_eventos():
+    """?desde=<último id visto>. Sem 'desde' (primeira chamada) só devolve o estado atual e o id de agora."""
+    desde = request.args.get("desde", type=int)
+    evs, ultimo = emo.eventos(desde if desde is not None and desde >= 0 else 10**12)
+    return jsonify(eventos=evs, ultimo=ultimo, atual=emo.estado())
+
+
+@app.post("/pet/toque")
+def pet_toque():
+    emo.on_toque()
+    return jsonify(atual=emo.estado())
+
+
+@app.post("/pet/definir")
+def pet_definir():
+    b = corpo()
+    try:
+        dur = float(b.get("dur") or 8)
+    except (TypeError, ValueError):
+        return jsonify(error="Duração inválida."), 400
+    if not emo.definir(b.get("nome"), max(1.0, min(dur, 600.0)), "manual", forcar=True, respeitar_bloqueio=False):
+        return jsonify(error="Emoção desconhecida."), 400
+    return jsonify(atual=emo.estado())
+
+
+@app.post("/pet/ritmo")
+def pet_ritmo():
+    try:
+        emo.ritmo = max(0.0, min(float(corpo().get("ritmo")), 5.0))
+    except (TypeError, ValueError):
+        return jsonify(error="Ritmo inválido."), 400
+    return jsonify(atual=emo.estado())
+
+
+@app.post("/pet/dormir")
+def pet_dormir():
+    emo.dormir()
+    return jsonify(atual=emo.estado())
+
+
+@app.post("/pet/acordar")
+def pet_acordar():
+    emo.acordar()
+    return jsonify(atual=emo.estado())
 
 
 # ---------------------------------------------------------------- painel, agenda, planilhas
