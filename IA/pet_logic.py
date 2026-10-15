@@ -121,7 +121,9 @@ def garantir_servidor(cliente, server_py, cwd, espera=45):
     if cliente.no_ar():
         return None
     flags = 0x08000000 if os.name == "nt" else 0  # CREATE_NO_WINDOW
-    proc = subprocess.Popen([sys.executable, server_py], cwd=cwd, creationflags=flags,
+    # sem console o Python usaria cp1252 e emoji nos prints dariam erro: pede UTF-8 ao servidor
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+    proc = subprocess.Popen([sys.executable, server_py], cwd=cwd, creationflags=flags, env=env,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     fim = time.time() + espera
     while time.time() < fim:
@@ -141,7 +143,11 @@ PADRAO = {"escala": 0.7, "x": None, "y": None, "topo": True, "passear": True, "a
           "chamada": False,   # depois que ela responde, abre o microfone de novo sozinha
           "olhar": True,      # vira para o lado do mouse
           "espera": 10,       # segundos esperando você começar a falar, antes de desistir
-          "preparar_ouvido": True}  # carrega o Whisper ao abrir o pet (o 1º clique no microfone não espera)
+          "preparar_ouvido": True,  # carrega o Whisper ao abrir o pet (o 1º clique no microfone não espera)
+          "tecla": "",        # atalho global para falar (ex.: 'f9', 'ctrl+alt+space'); vazio = nenhum
+          "btn_mic": True,    # mostra o botão 🎤 ao lado dela
+          "btn_texto": True,  # mostra o botão ⌨ ao lado dela
+          "btn_hover": False}  # só mostra os botões quando o mouse está perto
 
 
 def caminho_config():
@@ -491,9 +497,21 @@ def dentro_rect(rc, x, y):
     return x0 <= x <= x0 + w and y0 <= y <= y0 + h
 
 
-def botao_em(lay, x, y):
-    """Qual botão está nesse ponto da janela ('mic', 'texto') ou None."""
+def botoes_visiveis(cfg, voz_ativa=False, perto=True):
+    """
+    Quais botões aparecem. Ocultar vale só quando está tudo parado: enquanto a conversa por voz está
+    ativa, o 🎤 reaparece (você vê que ela está ouvindo e consegue cancelar ou interromper).
+    """
+    def mostra(chave):
+        return bool(cfg.get(chave, True)) and (perto or not cfg.get("btn_hover"))
+    return {"mic": bool(voz_ativa) or mostra("btn_mic"), "texto": mostra("btn_texto")}
+
+
+def botao_em(lay, x, y, visiveis=None):
+    """Qual botão VISÍVEL está nesse ponto da janela ('mic', 'texto') ou None."""
     for nome, c in botoes(lay).items():
+        if visiveis is not None and not visiveis.get(nome):
+            continue
         if dentro_circulo(c, x, y):
             return nome
     return None
@@ -533,3 +551,98 @@ def virar_para(cursor_x, centro_x, atual, margem=140):
     if cursor_x < centro_x - margem:
         return False
     return atual
+
+
+# ======================================================================== tecla de atalho (global)
+MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN = 1, 2, 4, 8  # valores do RegisterHotKey do Windows
+
+_NOMES_VK = {  # nome normalizado -> código de tecla virtual do Windows
+    "space": 0x20, "tab": 0x09, "enter": 0x0D, "esc": 0x1B, "backspace": 0x08, "pause": 0x13, "insert": 0x2D,
+    "delete": 0x2E, "home": 0x24, "end": 0x23, "pageup": 0x21, "pagedown": 0x22, "left": 0x25, "up": 0x26,
+    "right": 0x27, "down": 0x28, "print": 0x2C, "scrolllock": 0x91,
+}
+_ROTULOS = {"space": "Espaço", "esc": "Esc", "pageup": "PgUp", "pagedown": "PgDn", "print": "PrintScreen",
+            "scrolllock": "ScrollLock", "pause": "Pause", "enter": "Enter", "tab": "Tab", "backspace": "Backspace",
+            "insert": "Insert", "delete": "Delete", "home": "Home", "end": "End", "left": "←", "up": "↑",
+            "right": "→", "down": "↓"}
+_ALIAS_TECLA = {"espaço": "space", "espaco": "space", "return": "enter", "escape": "esc", "pausa": "pause",
+                "break": "pause", "del": "delete", "ins": "insert", "pgup": "pageup", "pgdn": "pagedown",
+                "pgdown": "pagedown", "prtsc": "print", "printscreen": "print", "prtscn": "print",
+                "scroll": "scrolllock", "esquerda": "left", "direita": "right", "cima": "up", "baixo": "down"}
+_ALIAS_MOD = {"ctrl": "ctrl", "control": "ctrl", "ctl": "ctrl", "alt": "alt", "shift": "shift", "win": "win",
+              "windows": "win", "meta": "win", "super": "win", "cmd": "win"}
+# sozinhas (sem Ctrl/Alt/Shift/Win) estas teclas não atrapalham quem digita; as outras roubariam a tecla do sistema todo
+_SOZINHAS_OK = {"pause", "print", "scrolllock"}
+
+
+@dataclass
+class Atalho:
+    mods: int
+    vk: int
+    texto: str    # normalizado, o que fica salvo: 'ctrl+alt+space', 'f9'
+    rotulo: str   # para mostrar: 'Ctrl+Alt+Espaço', 'F9'
+
+
+def _vk_da_tecla(nome):
+    if len(nome) == 1 and nome.isascii() and nome.isalnum():
+        return ord(nome.upper())  # letras e dígitos: o código virtual é o do ASCII maiúsculo
+    if nome.startswith("f") and nome[1:].isdigit() and 1 <= int(nome[1:]) <= 24:
+        return 0x70 + int(nome[1:]) - 1
+    return _NOMES_VK.get(nome)
+
+
+def parse_atalho(texto):
+    """'ctrl+alt+espaço', 'F9', 'pausa' -> Atalho. ValueError (com mensagem legível) se não servir."""
+    partes = [p.strip().lower() for p in (texto or "").replace(" + ", "+").split("+") if p.strip()]
+    if not partes:
+        raise ValueError("Nenhuma tecla informada.")
+    mods, principal = set(), None
+    for p in partes:
+        if p in _ALIAS_MOD:
+            mods.add(_ALIAS_MOD[p])
+        elif principal is None:
+            principal = _ALIAS_TECLA.get(p, p)
+        else:
+            raise ValueError("Use uma tecla só (mais Ctrl, Alt, Shift ou Win), por exemplo ctrl+alt+espaço.")
+    if principal is None:
+        raise ValueError("Falta a tecla principal (só Ctrl/Alt/Shift não vale).")
+    vk = _vk_da_tecla(principal)
+    if vk is None:
+        raise ValueError(f"Não conheço a tecla '{principal}'.")
+    sozinha_ok = principal in _SOZINHAS_OK or (principal.startswith("f") and principal[1:].isdigit())
+    if not mods and not sozinha_ok:
+        raise ValueError("Essa tecla sozinha atrapalharia a digitação em todo o Windows. "
+                         "Use uma tecla F (F1 a F24), Pause, ScrollLock, PrintScreen ou combine com Ctrl/Alt/Shift.")
+    bits = {"ctrl": MOD_CONTROL, "alt": MOD_ALT, "shift": MOD_SHIFT, "win": MOD_WIN}
+    ordem = [m for m in ("ctrl", "alt", "shift", "win") if m in mods]
+    bonito = {"ctrl": "Ctrl", "alt": "Alt", "shift": "Shift", "win": "Win"}
+    rotulo_tecla = _ROTULOS.get(principal, principal.upper())
+    return Atalho(sum(bits[m] for m in ordem), vk, "+".join(ordem + [principal]),
+                  "+".join([bonito[m] for m in ordem] + [rotulo_tecla]))
+
+
+# códigos de tecla do Qt (constantes fixas da documentação do Qt::Key), para o "aperte a tecla desejada"
+_QT_NOMES = {0x20: "space", 0x01000001: "tab", 0x01000003: "backspace", 0x01000004: "enter", 0x01000005: "enter",
+             0x01000006: "insert", 0x01000007: "delete", 0x01000008: "pause", 0x01000009: "print",
+             0x01000010: "home", 0x01000011: "end", 0x01000012: "left", 0x01000013: "up", 0x01000014: "right",
+             0x01000015: "down", 0x01000016: "pageup", 0x01000017: "pagedown", 0x01000026: "scrolllock"}
+_QT_SO_MODIFICADOR = {0x01000020, 0x01000021, 0x01000022, 0x01000023, 0x01001103}  # Shift, Ctrl, Meta, Alt, AltGr
+
+
+def combo_de_qt(tecla, ctrl=False, alt=False, shift=False, meta=False):
+    """
+    Converte a tecla que o Qt informou ao apertar em texto de atalho ('ctrl+f9').
+    Devolve None se foi só um modificador (continua esperando) ou uma tecla sem suporte.
+    """
+    if tecla in _QT_SO_MODIFICADOR:
+        return None
+    if 0x30 <= tecla <= 0x39 or 0x41 <= tecla <= 0x5A:
+        nome = chr(tecla).lower()
+    elif 0x01000030 <= tecla <= 0x01000030 + 23:
+        nome = f"f{tecla - 0x01000030 + 1}"
+    else:
+        nome = _QT_NOMES.get(tecla)
+    if nome is None:
+        return None
+    mods = [m for m, ativo in (("ctrl", ctrl), ("alt", alt), ("shift", shift), ("win", meta)) if ativo]
+    return "+".join(mods + [nome])

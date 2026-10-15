@@ -21,6 +21,10 @@ Acesso pelo celular (veja o LEIAME-CELULAR.md):
     ALICE_HOST=0.0.0.0        escuta na rede (padrão 127.0.0.1: só este PC)
     ALICE_TOKEN=uma-senha     OBRIGATÓRIA quando ALICE_HOST não for local. Fora do PC, toda chamada exige essa senha.
 """
+from brain.saida import forcar_utf8
+
+forcar_utf8()  # print com emoji não pode derrubar o servidor quando a saída não é um console UTF-8
+
 import importlib.util
 import json
 import os

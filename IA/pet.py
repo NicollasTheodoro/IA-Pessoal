@@ -7,7 +7,9 @@ Desktop pet da Alice: ela vive na sua tela, sempre por cima, e usa as mesmas exp
 O que dá para fazer:
     botão 🎤            conversa por voz: clique, fale, e ela percebe sozinha quando você para
                         (clique de novo para falar outra vez; durante a resposta, interrompe e escuta)
+    tecla de atalho     (menu > ⌨ Tecla para falar) o mesmo que clicar no 🎤, de qualquer programa
     botão ⌨             abre a caixa de texto (também: duplo clique nela)
+    menu > Botões       esconde o 🎤 e/ou o ⌨, ou só mostra quando o mouse chega perto
     clique              cutuca (1x simpática, várias seguidas ela se irrita)
     arrastar            muda de lugar; ao soltar no ar ela cai e quica
     botão direito       menu: conversar, expressões, ritmo, tamanho, passear, dormir...
@@ -27,6 +29,10 @@ import webbrowser
 
 import pet_logic as L
 from brain.emocoes import catalogo
+from pet_hotkey import AtalhoGlobal
+from brain.saida import forcar_utf8
+
+forcar_utf8()
 
 try:
     from PySide6 import QtCore, QtGui, QtWidgets
@@ -55,6 +61,7 @@ class Ponte(QtCore.QObject):
     voz_erro = Signal(int, str)  # (status http, mensagem)
     voz = Signal(str)          # novo estado do botão (pensando/falando) vindo da conversa
     chat_fim = Signal(bool)    # a resposta terminou (True se a pergunta veio por voz)
+    atalho = Signal()          # a tecla de atalho global foi apertada
 
 
 class CaixaTexto(QtWidgets.QWidget):
@@ -105,8 +112,69 @@ class CaixaTexto(QtWidgets.QWidget):
         super().changeEvent(e)
 
 
+class CapturaTecla(QtWidgets.QWidget):
+    """'Aperte a tecla (ou combinação) que você quer usar para falar com a Alice.'"""
+    capturada = Signal(str)   # texto do atalho, ex.: 'ctrl+alt+space'
+    cancelada = Signal()
+
+    def __init__(self):
+        super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        quadro = QtWidgets.QFrame(self)
+        quadro.setObjectName("quadro")
+        quadro.setStyleSheet("#quadro{background:#231a33;border:2px solid #ffd95a;border-radius:14px}"
+                             "QLabel{color:#f6f0ff;font-size:14px;padding:10px 14px}")
+        self.rotulo = QtWidgets.QLabel("Aperte a tecla (ou combinação) para falar com a Alice.\nEsc cancela.", quadro)
+        interno = QtWidgets.QVBoxLayout(quadro)
+        interno.setContentsMargins(6, 4, 6, 4)
+        interno.addWidget(self.rotulo)
+        externo = QtWidgets.QVBoxLayout(self)
+        externo.setContentsMargins(0, 0, 0, 0)
+        externo.addWidget(quadro)
+        self.setFixedSize(400, 84)
+        self._concluida = False
+
+    def abrir(self, pos):
+        self._concluida = False
+        self.move(pos)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.setFocus()
+
+    def _fechar(self, combo=None):
+        if self._concluida:
+            return
+        self._concluida = True
+        self.hide()
+        if combo:
+            self.capturada.emit(combo)
+        else:
+            self.cancelada.emit()
+
+    @staticmethod
+    def _tem(modificadores, flag):
+        return bool(modificadores & flag)
+
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key.Key_Escape:
+            self._fechar()
+            return
+        m, K = e.modifiers(), Qt.KeyboardModifier
+        combo = L.combo_de_qt(int(e.key()), ctrl=self._tem(m, K.ControlModifier), alt=self._tem(m, K.AltModifier),
+                              shift=self._tem(m, K.ShiftModifier), meta=self._tem(m, K.MetaModifier))
+        if combo:  # só modificador (Ctrl, Shift...) ou tecla sem suporte: continua esperando
+            self._fechar(combo)
+
+    def changeEvent(self, e):
+        if e.type() == QtCore.QEvent.Type.ActivationChange and self.isVisible() and not self.isActiveWindow():
+            self._fechar()  # clicou em outro lugar: cancela
+        super().changeEvent(e)
+
+
 class JanelaPet(QtWidgets.QWidget):
-    def __init__(self, cfg, cliente, ligou_servidor=False):
+    def __init__(self, cfg, cliente, ligou_servidor=False, api_atalho=None):
         super().__init__(None)
         self.cfg, self.cliente, self.ligou_servidor = cfg, cliente, ligou_servidor
         self.cat = catalogo()
@@ -139,6 +207,8 @@ class JanelaPet(QtWidgets.QWidget):
         self.mic_disponivel, self.mic_pronto = None, False   # None = ainda não sei
         self.nivel, self.nivel_alvo, self.t_voz = 0.0, 0.0, agora
         self._gen_escuta, self._gen_chat, self._t_olhar = 0, 0, 0.0
+        self._perto, self._t_perto = False, 0.0   # mouse perto dela (para "botões só ao passar o mouse")
+        self._rotulo_tecla = ""
         self._ultimo, self._offline_avisado = agora, False
         self._cache = {}
 
@@ -155,6 +225,11 @@ class JanelaPet(QtWidgets.QWidget):
         self.ponte.voz_erro.connect(self.on_voz_erro)
         self.ponte.voz.connect(self.on_voz)
         self.ponte.chat_fim.connect(self.on_chat_fim)
+        self.ponte.atalho.connect(self._atalho_apertado)
+        self.atalho = AtalhoGlobal(lambda: self.ponte.atalho.emit(), api=api_atalho)
+        self.captura = CapturaTecla()
+        self.captura.capturada.connect(self._tecla_capturada)
+        self.captura.cancelada.connect(self._captura_cancelada)
         self.caixa = CaixaTexto()
         self.caixa.enviado.connect(self.enviar)
         self._clique = QtCore.QTimer(self)
@@ -170,6 +245,8 @@ class JanelaPet(QtWidgets.QWidget):
 
         self._posicao_inicial()
         self._bandeja()
+        if self.cfg["tecla"]:
+            self._aplicar_tecla(self.cfg["tecla"], avisar=False)
 
     # ------------------------------------------------------------------ layout e sprites
     def _aplicar_layout(self):
@@ -339,6 +416,58 @@ class JanelaPet(QtWidgets.QWidget):
         if self.voz_estado == "parado" and self.chamada.ativa:
             self.iniciar_escuta()
 
+    # ------------------------------------------------------------------ tecla de atalho
+    def _atalho_apertado(self):
+        if not self.isVisible():
+            self.show()  # escondida na bandeja: aparece para você ver que ela está ouvindo
+        self.clique_mic()
+
+    def capturar_tecla(self):
+        geo = self._tela().availableGeometry()
+        x = max(geo.left(), min(self.x() + (self.width() - self.captura.width()) // 2,
+                                geo.right() + 1 - self.captura.width()))
+        y = max(geo.top(), self.y() + self.height() - self.L.margem - self.L.sprite_h - self.captura.height() - 6)
+        # enquanto captura, solta a tecla atual: senão apertá-la de novo acionaria o microfone em vez de ser lida
+        threading.Thread(target=self.atalho.definir, args=(None,), daemon=True).start()
+        self.captura.abrir(QtCore.QPoint(x, y))
+
+    def _tecla_capturada(self, combo):
+        self._aplicar_tecla(combo)
+
+    def _captura_cancelada(self):
+        self._aplicar_tecla(self.cfg["tecla"], avisar=False)  # volta a valer a de antes
+
+    def _aplicar_tecla(self, texto, avisar=True):
+        """Valida, registra no Windows e salva. Roda em thread (o registro espera a resposta do Windows)."""
+        def go():
+            try:
+                novo = L.parse_atalho(texto) if texto else None
+            except ValueError as e:
+                self.ponte.texto.emit(str(e), "aviso")
+                self._restaurar_tecla()
+                return
+            ok, msg = self.atalho.definir(novo)
+            if not ok:
+                self.ponte.texto.emit(msg, "aviso")
+                self._restaurar_tecla()
+                return
+            self._set("tecla", novo.texto if novo else "")
+            self._rotulo_tecla = novo.rotulo if novo else ""
+            if avisar:
+                self.ponte.texto.emit(f"Pronto! Aperte {novo.rotulo} para falar comigo." if novo
+                                      else "Tirei a tecla de falar.", "aviso")
+        threading.Thread(target=go, daemon=True).start()
+
+    def _restaurar_tecla(self):
+        """A tecla nova não serviu: religa a que estava salva (registrar de novo a mesma é inofensivo)."""
+        try:
+            antiga = L.parse_atalho(self.cfg["tecla"]) if self.cfg["tecla"] else None
+            self.atalho.definir(antiga)
+            # o rótulo mostra o que está REALMENTE registrado (a salva pode estar em uso por outro programa)
+            self._rotulo_tecla = self.atalho.atual.rotulo if self.atalho.atual else ""
+        except Exception:
+            pass
+
     # ------------------------------------------------------------------ voz (microfone do PC)
     _DICA_VOZ = {"preparando": "⏳ Preparando o ouvido…", "ouvindo": "🎧 Pode falar…",
                  "gravando": "🎧 Te ouvindo…", "transcrevendo": "🧠 Entendendo…"}
@@ -455,6 +584,9 @@ class JanelaPet(QtWidgets.QWidget):
             self._aplicar(ev)
         self._mover(agora, dt)
         self.nivel = L.suavizar(self.nivel, self.nivel_alvo)
+        if self.frameGeometry().contains(QtGui.QCursor.pos()):
+            self._t_perto = agora
+        self._perto = agora - self._t_perto < 0.7  # um pouquinho de folga para os botões não piscarem
         if self.cfg["olhar"] and not self.salto and not self.arrastando and agora - self._t_olhar > 0.25:
             self._t_olhar = agora
             self.virado = L.virar_para(QtGui.QCursor.pos().x(), self.x() + self.width() / 2, self.virado)
@@ -555,9 +687,15 @@ class JanelaPet(QtWidgets.QWidget):
         fm = QtGui.QFontMetrics(f)
         p.drawText(QtCore.QPointF(cx - fm.horizontalAdvance(texto) / 2, cy + fm.ascent() / 2 - 2), texto)
 
+    def _visiveis(self):
+        return L.botoes_visiveis(self.cfg, self.voz_estado != "parado", self._perto)
+
     def _desenhar_botoes(self, p, agora):
         """🎤 e ⌨ junto aos pés dela. O 🎤 mostra o estado da conversa por voz e o volume da sua voz."""
+        visiveis = self._visiveis()
         for nome, (cx, cy, r) in L.botoes(self.L).items():
+            if not visiveis[nome]:
+                continue
             mic = nome == "mic"
             estado = self.voz_estado if mic else "parado"
             indisponivel = mic and self.mic_disponivel is False
@@ -591,7 +729,11 @@ class JanelaPet(QtWidgets.QWidget):
                 self._texto_centrado(p, "📞", cx + r * 0.85, cy - r * 0.85, max(7, int(r * 0.6)))
 
             if self._hover == nome:  # rótulo do botão
-                rotulo = ("Microfone indisponível" if indisponivel else self._ROTULO_MIC[estado]) if mic else "Digitar"
+                rotulo = "Microfone indisponível" if indisponivel else self._ROTULO_MIC[estado]
+                if mic and estado == "parado" and self._rotulo_tecla and not indisponivel:
+                    rotulo += f" ({self._rotulo_tecla})"
+                if not mic:
+                    rotulo = "Digitar"
                 f = QtGui.QFont("Segoe UI", 9)
                 p.setFont(f)
                 fm = QtGui.QFontMetrics(f)
@@ -654,7 +796,7 @@ class JanelaPet(QtWidgets.QWidget):
         for nome, rc in self._rects_aviso.items():
             if L.dentro_rect(rc, x, y):
                 return "aviso_" + nome
-        return L.botao_em(self.L, x, y)
+        return L.botao_em(self.L, x, y, self._visiveis())
 
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
@@ -751,6 +893,9 @@ class JanelaPet(QtWidgets.QWidget):
     def _menu(self):
         m = QtWidgets.QMenu(self)
         m.addAction("🎤 Falar (microfone)", self.clique_mic)
+        m.addAction(f"⌨ Tecla para falar: {self._rotulo_tecla or 'nenhuma'}…", self.capturar_tecla)
+        if self.cfg["tecla"]:
+            m.addAction("🚫 Tirar a tecla de falar", lambda checked=False: self._aplicar_tecla(""))
         m.addAction("💬 Digitar…", self.abrir_caixa)
         m.addAction("🔇 Calar a Alice", lambda checked=False: (self._set_gen_chat(), self._async(self.cliente.parar_fala)))
 
@@ -769,6 +914,14 @@ class JanelaPet(QtWidgets.QWidget):
         tam = m.addMenu("📏 Tamanho")
         for rotulo, v in (("Pequena", 0.5), ("Média", 0.7), ("Grande", 1.0), ("Enorme", 1.4)):
             tam.addAction(rotulo, lambda checked=False, v=v: self.mudar_escala(v))
+
+        botoes = m.addMenu("🔘 Botões ao lado dela")
+        for rotulo, chave in (("🎤 Microfone", "btn_mic"), ("⌨ Digitar", "btn_texto"),
+                              ("Só aparecer quando o mouse estiver perto", "btn_hover")):
+            a = botoes.addAction(rotulo)
+            a.setCheckable(True)
+            a.setChecked(bool(self.cfg[chave]))
+            a.toggled.connect(lambda v, c=chave: self._set(c, bool(v)))
 
         for rotulo, chave in (("🔊 Alice fala em voz alta", "voz"),
                               ("📞 Modo chamada (ouve de novo depois de responder)", "chamada"),
@@ -820,6 +973,7 @@ class JanelaPet(QtWidgets.QWidget):
         self.show()  # trocar a flag esconde a janela: precisa mostrar de novo
 
     def encerrar(self):
+        self.atalho.parar()
         self._gen_escuta += 1
         if self.voz_estado in ("preparando", "ouvindo", "gravando", "transcrevendo"):
             try:

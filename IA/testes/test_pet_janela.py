@@ -15,6 +15,7 @@ fake_qt.instalar()
 import pet  # noqa: E402
 import pet_logic as L  # noqa: E402
 from fake_qt import QPoint, QPainter  # noqa: E402
+from test_hotkey import ApiFalsa  # noqa: E402
 
 
 class ClienteFalso:
@@ -582,6 +583,259 @@ class LembreteEOlhar(unittest.TestCase):
                 break
         self.assertIsNotNone(self.w.salto)
         self.assertEqual(self.w.virado, self.w.salto.x1 > self.w.salto.x0)
+
+
+class Mods:
+    """Modificadores do teclado: m & Qt.KeyboardModifier.XModifier."""
+    def __init__(self, *nomes):
+        self.nomes = set(nomes)
+    def __and__(self, flag):
+        return flag.nome.split(".")[-1] in self.nomes
+
+
+class EvTecla:
+    def __init__(self, tecla, *mods):
+        self._k, self._m = tecla, Mods(*mods)
+    def key(self): return self._k
+    def modifiers(self): return self._m
+
+
+F1, F9, F10 = 0x01000030, 0x01000030 + 8, 0x01000030 + 9
+CTRL = 0x01000021
+
+
+def textos_desenhados():
+    return [c[1][1] for c in QPainter.chamadas if c[0] == "drawText" and len(c[1]) == 2]
+
+
+class AtalhoNoPet(unittest.TestCase):
+    def setUp(self):
+        fake_qt.QTimer.pendentes = []
+        fake_qt.QCursor.posicao = QPoint(5, 5)
+        self.api, self.cli = ApiFalsa(), ClienteFalso()
+        self.cfg = {**L.PADRAO, "tecla": "f9"}
+        self.w = pet.JanelaPet(self.cfg, self.cli, api_atalho=self.api)
+        esperar(lambda: self.w._rotulo_tecla == "F9")
+
+    def tearDown(self):
+        self.w.atalho.parar()
+        self.w._parar.set()
+        for g in (self.cli.portao, self.cli.portao_ouvir):
+            if g:
+                g.set()
+
+    def ultima_registrada(self):
+        regs = [x for x in self.api.log if x[0] == "reg"]
+        return regs[-1][2] if regs else None
+
+    def abrir_captura(self):
+        self.w.capturar_tecla()
+        self.assertTrue(self.w.captura.isVisible())
+        self.assertTrue(esperar(lambda: self.api.log[-1] == ("des",)), "solta a tecla atual enquanto captura")
+
+    def test_registra_a_tecla_salva_ao_abrir(self):
+        self.assertEqual(self.ultima_registrada(), 0x78)
+        self.assertEqual(self.w._rotulo_tecla, "F9")
+        m = self.w._menu()
+        self.assertIn("⌨ Tecla para falar: F9…", [getattr(i, "texto", "") for i in m.itens])
+        self.assertIn("🚫 Tirar a tecla de falar", [getattr(i, "texto", "") for i in m.itens])
+
+    def test_apertar_a_tecla_equivale_a_clicar_no_microfone(self):
+        self.cli.portao_ouvir = threading.Event()
+        self.api.apertar()
+        self.assertTrue(esperar(lambda: self.w.voz_estado == "ouvindo"))
+        self.assertTrue(esperar(lambda: "ouvir" in self.cli.chamadas))
+        self.api.apertar()  # de novo: cancela, como o segundo clique
+        self.assertTrue(esperar(lambda: self.w.voz_estado == "parado"))
+        self.assertIn("ouvir_cancelar", self.cli.chamadas)
+
+    def test_a_tecla_funciona_com_o_pet_escondido_e_ele_aparece(self):
+        self.cli.portao_ouvir = threading.Event()
+        self.w.hide()
+        self.api.apertar()
+        self.assertTrue(esperar(lambda: self.w.isVisible()))
+        self.assertTrue(esperar(lambda: self.w.voz_estado == "ouvindo"))
+
+    def test_tecla_em_uso_avisa_ao_abrir(self):
+        api = ApiFalsa()
+        api.recusar.add(0x78)
+        w = pet.JanelaPet({**L.PADRAO, "tecla": "f9"}, ClienteFalso(), api_atalho=api)
+        self.assertTrue(esperar(lambda: "já está sendo usada" in w.balao.texto))
+        self.assertEqual(w._rotulo_tecla, "")
+        w.atalho.parar()
+        w._parar.set()
+
+    def test_escolher_uma_tecla_nova(self):
+        self.abrir_captura()
+        self.w.captura.keyPressEvent(EvTecla(F10))
+        self.assertFalse(self.w.captura.isVisible())
+        self.assertTrue(esperar(lambda: self.cfg["tecla"] == "f10"))
+        self.assertEqual(self.ultima_registrada(), 0x79)
+        self.assertTrue(esperar(lambda: "Aperte F10" in self.w.balao.texto))
+        self.assertEqual(self.w._rotulo_tecla, "F10")
+
+    def test_combinacao_com_modificadores(self):
+        self.abrir_captura()
+        self.w.captura.keyPressEvent(EvTecla(0x20, "ControlModifier", "AltModifier"))
+        self.assertTrue(esperar(lambda: self.cfg["tecla"] == "ctrl+alt+space"))
+        self.assertEqual(self.w._rotulo_tecla, "Ctrl+Alt+Espaço")
+        self.assertEqual([x for x in self.api.log if x[0] == "reg"][-1][1] & 3, 3)
+
+    def test_so_modificador_continua_esperando(self):
+        self.abrir_captura()
+        self.w.captura.keyPressEvent(EvTecla(CTRL, "ControlModifier"))
+        self.assertTrue(self.w.captura.isVisible())
+        self.w.captura.keyPressEvent(EvTecla(F10, "ControlModifier"))
+        self.assertTrue(esperar(lambda: self.cfg["tecla"] == "ctrl+f10"))
+
+    def test_esc_cancela_e_a_tecla_antiga_volta(self):
+        self.abrir_captura()
+        self.w.captura.keyPressEvent(EvTecla(pet.Qt.Key.Key_Escape))
+        self.assertFalse(self.w.captura.isVisible())
+        self.assertTrue(esperar(lambda: self.ultima_registrada() == 0x78 and self.api.log[-1][0] == "reg"))
+        self.assertEqual(self.cfg["tecla"], "f9")
+        self.cli.portao_ouvir = threading.Event()
+        self.api.apertar()
+        self.assertTrue(esperar(lambda: self.w.voz_estado == "ouvindo"), "a antiga voltou a funcionar")
+
+    def test_tecla_que_atrapalharia_a_digitacao_e_recusada(self):
+        self.abrir_captura()
+        self.w.captura.keyPressEvent(EvTecla(0x41))  # a letra A sozinha
+        self.assertTrue(esperar(lambda: "sozinha" in self.w.balao.texto))
+        self.assertEqual(self.cfg["tecla"], "f9")
+        self.assertTrue(esperar(lambda: self.ultima_registrada() == 0x78 and self.api.log[-1][0] == "reg"))
+
+    def test_tecla_ja_usada_por_outro_programa_mantem_a_antiga(self):
+        self.api.recusar.add(0x79)
+        self.abrir_captura()
+        self.w.captura.keyPressEvent(EvTecla(F10))
+        self.assertTrue(esperar(lambda: "já está sendo usada" in self.w.balao.texto))
+        self.assertEqual(self.cfg["tecla"], "f9")
+        self.assertTrue(esperar(lambda: self.api.log[-1][0] == "reg" and self.ultima_registrada() == 0x78))
+        self.assertEqual(self.w._rotulo_tecla, "F9")
+
+    def test_tirar_a_tecla_pelo_menu(self):
+        m = self.w._menu()
+        tirar = next(i for i in m.itens if getattr(i, "texto", "") == "🚫 Tirar a tecla de falar")
+        tirar.cb(False)
+        self.assertTrue(esperar(lambda: self.cfg["tecla"] == ""))
+        self.assertTrue(esperar(lambda: self.api.log[-1] == ("des",)))
+        self.assertEqual(self.w._rotulo_tecla, "")
+        self.assertIsNone(self.w.atalho.atual)
+        self.assertNotIn("🚫 Tirar a tecla de falar", [getattr(i, "texto", "") for i in self.w._menu().itens])
+
+    def test_o_rotulo_do_botao_mostra_a_tecla(self):
+        cx, cy = centro(self.w, "mic")
+        self.w.mouseMoveEvent(EvBotao(cx, cy))
+        self.w.paintEvent(None)
+        self.assertIn("Falar (F9)", textos_desenhados())
+
+    def test_fechar_o_pet_solta_a_tecla(self):
+        t = self.w.atalho._thread
+        self.w.encerrar()
+        self.assertFalse(t.is_alive())
+        self.assertEqual(self.api.log[-1], ("des",))
+
+    def test_sem_tecla_salva_nao_registra_nada(self):
+        api = ApiFalsa()
+        w = pet.JanelaPet({**L.PADRAO}, ClienteFalso(), api_atalho=api)
+        time.sleep(0.1)
+        self.assertEqual(api.log, [])
+        self.assertIn("⌨ Tecla para falar: nenhuma…", [getattr(i, "texto", "") for i in w._menu().itens])
+        w._parar.set()
+
+
+class BotoesVisiveis(unittest.TestCase):
+    def setUp(self):
+        fake_qt.QCursor.posicao = QPoint(5, 5)
+        self.cli, self.cfg = ClienteFalso(), dict(L.PADRAO)
+        self.w = pet.JanelaPet(self.cfg, self.cli, api_atalho=ApiFalsa())
+        esperar(lambda: self.w.mic_disponivel is not None)
+
+    def tearDown(self):
+        self.w._parar.set()
+        if self.cli.portao_ouvir:
+            self.cli.portao_ouvir.set()
+
+    def icones(self):
+        self.w.paintEvent(None)
+        txt = textos_desenhados()
+        return ("🎤" in txt or "⏳" in txt or "💭" in txt or "⏹" in txt), "⌨" in txt
+
+    def test_por_padrao_aparecem_os_dois(self):
+        self.assertEqual(self.icones(), (True, True))
+
+    def test_ocultar_o_digitar(self):
+        self.cfg["btn_texto"] = False
+        self.assertEqual(self.icones(), (True, False))
+        cx, cy = centro(self.w, "texto")
+        clicar(self.w, cx, cy)
+        self.assertFalse(self.w.caixa.isVisible(), "botão oculto não recebe clique")
+        self.w.mouseDoubleClickEvent(EvBotao(10, 10))
+        self.assertTrue(self.w.caixa.isVisible(), "o duplo clique nela continua abrindo a caixa")
+
+    def test_ocultar_o_microfone(self):
+        self.cfg["btn_mic"] = False
+        self.assertEqual(self.icones(), (False, True))
+        cx, cy = centro(self.w, "mic")
+        clicar(self.w, cx, cy)
+        time.sleep(0.05)
+        self.assertNotIn("ouvir", self.cli.chamadas)
+        self.assertEqual(self.w.voz_estado, "parado")
+
+    def test_microfone_oculto_reaparece_enquanto_conversa_por_voz(self):
+        self.cfg["btn_mic"] = False
+        self.cli.portao_ouvir = threading.Event()
+        self.w.clique_mic()  # pelo menu ou pela tecla de atalho
+        self.assertTrue(esperar(lambda: self.w.voz_estado == "ouvindo"))
+        self.assertEqual(self.icones()[0], True, "aparece para você ver que ela está ouvindo")
+        cx, cy = centro(self.w, "mic")
+        clicar(self.w, cx, cy)  # e dá para cancelar nele
+        self.assertEqual(self.w.voz_estado, "parado")
+        self.assertEqual(self.icones()[0], False, "e some de novo quando termina")
+
+    def test_ocultar_os_dois(self):
+        self.cfg.update(btn_mic=False, btn_texto=False)
+        self.assertEqual(self.icones(), (False, False))
+        self.assertIsNone(self.w._alvo_em(QPoint(*centro(self.w, "mic"))))
+        self.w.mouseMoveEvent(EvBotao(*centro(self.w, "mic")))
+        self.assertIsNone(self.w._hover)
+
+    def test_so_ao_passar_o_mouse(self):
+        self.cfg["btn_hover"] = True
+        self.w.tick()
+        self.assertEqual(self.icones(), (False, False), "mouse longe: escondidos")
+        fake_qt.QCursor.posicao = QPoint(self.w.x() + 50, self.w.y() + 50)
+        self.w.tick()
+        self.assertEqual(self.icones(), (True, True), "mouse perto: aparecem")
+        fake_qt.QCursor.posicao = QPoint(5, 5)
+        self.w.tick()
+        self.assertEqual(self.icones(), (True, True), "um instante de folga, sem piscar")
+        self.w._t_perto -= 5
+        self.w.tick()
+        self.assertEqual(self.icones(), (False, False), "passou a folga: somem")
+
+    def test_so_ao_passar_o_mouse_respeita_o_que_esta_oculto(self):
+        self.cfg.update(btn_hover=True, btn_texto=False)
+        fake_qt.QCursor.posicao = QPoint(self.w.x() + 50, self.w.y() + 50)
+        self.w.tick()
+        self.assertEqual(self.icones(), (True, False))
+
+    def test_menu_dos_botoes_altera_a_configuracao(self):
+        m = self.w._menu()
+        sub = next(i for i in m.itens if getattr(i, "texto", "") == "🔘 Botões ao lado dela")
+        self.assertEqual([i.texto for i in sub.itens],
+                         ["🎤 Microfone", "⌨ Digitar", "Só aparecer quando o mouse estiver perto"])
+        self.assertTrue(all(i.checavel and i.marcado for i in sub.itens[:2]))
+        self.assertFalse(sub.itens[2].marcado)
+        sub.itens[1].toggled.emit(False)
+        self.assertEqual(self.icones(), (True, False))
+        sub.itens[0].toggled.emit(False)
+        self.assertEqual(self.icones(), (False, False))
+        sub.itens[0].toggled.emit(True)
+        sub.itens[1].toggled.emit(True)
+        self.assertEqual(self.icones(), (True, True))
+        self.assertFalse(self.cfg["btn_hover"])
 
 
 if __name__ == "__main__":

@@ -76,6 +76,7 @@ class Rect:
     def bottom(self): return self._y + self._h - 1
     def topLeft(self): return QPoint(self._x, self._y)
     def center(self): return QPoint(self._x + self._w // 2, self._y + self._h // 2)
+    def contains(self, p): return self._x <= p.x() <= self._x + self._w and self._y <= p.y() <= self._y + self._h
 
 
 class QTimer(QObject):
@@ -113,6 +114,7 @@ class QWidget(QObject):
     def setAttribute(self, a): pass
     def setWindowTitle(self, t): pass
     def setMouseTracking(self, v): pass
+    def setFocusPolicy(self, p): pass
     def setCursor(self, c): self.cursor = c
     def leaveEvent(self, e): pass
     def setFixedSize(self, w, h): self._size = (w, h)
@@ -180,6 +182,14 @@ class QSystemTrayIcon(QObject):
 class QFrame(QWidget):
     def setObjectName(self, n): pass
     def setStyleSheet(self, s): pass
+
+
+class QLabel(QWidget):
+    def __init__(self, texto="", pai=None):
+        super().__init__()
+        self.t = texto
+    def setText(self, t): self.t = t
+    def text(self): return self.t
 
 
 class QLineEdit(QWidget):
@@ -284,7 +294,7 @@ def instalar():
               "QIcon", "QGuiApplication", "QCursor"):
         setattr(qtgui, n, globals()[n])
     qtw = types.ModuleType("PySide6.QtWidgets")
-    for n in ("QWidget", "QMenu", "QApplication", "QSystemTrayIcon", "QFrame", "QLineEdit", "QVBoxLayout"):
+    for n in ("QWidget", "QMenu", "QApplication", "QSystemTrayIcon", "QFrame", "QLabel", "QLineEdit", "QVBoxLayout"):
         setattr(qtw, n, globals()[n])
     raiz = types.ModuleType("PySide6")
     raiz.QtCore, raiz.QtGui, raiz.QtWidgets = qtcore, qtgui, qtw

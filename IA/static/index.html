@@ -99,6 +99,8 @@ header b{font:700 17px var(--display)}
 .mic.live{background:var(--pink);color:var(--on-pink);border-color:var(--ink)}
 #toast{position:fixed;bottom:84px;left:50%;transform:translateX(-50%);background:var(--sun);color:#000;padding:8px 16px;border-radius:99px;font-size:13.5px;font-weight:500;opacity:0;pointer-events:none;transition:opacity .2s;max-width:90%}
 #toast.on{opacity:1}
+.olho{background:none;border:0;font-size:16px;cursor:pointer;padding:0 2px;float:right;line-height:1;border-radius:8px}
+.olho:hover{background:var(--line)}
 .tabs{display:flex;gap:2px;flex:1;min-width:0}
 .tab{background:none;border:0;border-bottom:2px solid transparent;padding:6px 10px;font:700 15px var(--display);color:var(--dim);border-radius:0}
 .tab.on{color:var(--ink);border-color:var(--pink)}
@@ -228,6 +230,7 @@ aside.open{transform:none}
   <section class="view pad" id="v-tab" hidden>
     <div class="pills" id="tsel"></div>
     <p class="hint" id="tdica"></p>
+    <div class="btns" style="margin:0 0 12px"><button class="btn ghost" id="tpriv" hidden></button></div>
     <div class="card"><h3>Novo registro</h3><div class="form" id="tform"></div><div class="btns"><button class="btn" id="tadd">Adicionar</button></div></div>
     <div class="card"><h3>Gráfico</h3><div class="gctl" id="gctl"></div><div id="gbox"></div></div>
     <div class="card"><h3>Registros</h3><div class="scroll" id="tlist"></div><div class="btns"><button class="btn ghost" id="tcsv">Baixar CSV (abre no Excel)</button></div></div>
@@ -638,6 +641,29 @@ async function loadPainel(){
   try{PAINEL=await call('/painel')}catch(e){box.textContent='';box.append(el('p','hint',e.message));return}
   renderPainel();
 }
+/* privacidade: esconde os valores em R$ (painel, tabela e gráfico do Financeiro). A escolha fica salva. */
+let OCULTA=load('alice_priv_din',false)===true;
+const ehDinheiro=c=>!!c&&c.unidade==='R$';
+const temDinheiro=t=>!!t&&t.colunas.some(ehDinheiro);
+function setOculta(v){
+  OCULTA=!!v;save('alice_priv_din',OCULTA);
+  if(window.VIEW==='painel'&&PAINEL)renderPainel();
+  if(window.VIEW==='tab'&&TB.esquema){atualizarBotaoPriv();loadLinhas();loadGrafico()}
+}
+function atualizarBotaoPriv(){
+  const b=$('#tpriv'),t=TB.esquema&&tabAtual();
+  b.hidden=!temDinheiro(t);
+  b.textContent=OCULTA?'🙈 Valores ocultos · mostrar':'👁 Ocultar valores';
+  b.setAttribute('aria-pressed',OCULTA);
+}
+$('#tpriv').onclick=()=>setOculta(!OCULTA);
+function tileDinheiro(titulo,valor){
+  const c=el('div','card'),h=el('h3',null,titulo+' '),b=el('button','olho',OCULTA?'🙈':'👁');
+  b.title=OCULTA?'Mostrar valores':'Ocultar valores';b.setAttribute('aria-label',b.title);b.setAttribute('aria-pressed',OCULTA);
+  b.onclick=()=>setOculta(!OCULTA);h.append(b);
+  c.append(h,el('div','n',OCULTA?'R$ ••••••':'R$ '+valor.toLocaleString('pt-BR',{minimumFractionDigits:2})));
+  return c;
+}
 function tile(titulo,valor,sub){const c=el('div','card');c.append(el('h3',null,titulo),el('div','n',valor));if(sub)c.append(el('div','sub',sub));return c}
 function renderPainel(){
   const P=PAINEL,box=$('#v-painel'),R=P.resumo;box.textContent='';
@@ -652,7 +678,7 @@ function renderPainel(){
   g.append(hora,cl);
   const k=R.comida_hoje;
   g.append(tile('Comida hoje',k.k+' kcal','P '+k.p+' g · C '+k.c+' g · G '+k.g+' g'));
-  g.append(tile('Ganhos no mês','R$ '+R.ganhos_mes.toLocaleString('pt-BR',{minimumFractionDigits:2})));
+  g.append(tileDinheiro('Ganhos no mês',R.ganhos_mes));
   g.append(tile('Estudo hoje',R.estudo_hoje_min?dur(R.estudo_hoje_min):'0 min'));
   g.append(tile('Peso',R.peso?num(R.peso.kg)+' kg':'—',R.imc?'IMC '+num(R.imc):'informe peso e altura'));
   g.append(tile('Treinos na semana',String(R.treinos_semana),R.ultimo_treino?'último: '+(R.ultimo_treino.tipo||R.ultimo_treino.exercicio||'treino'):'nenhum ainda'));
@@ -713,12 +739,12 @@ function escolherTab(nome){
     i.dataset.c=c.nome;l.append(i);f.append(l);
   });
   const g=t.grafico||{};TB.graf={y:g.y,agg:g.agg||'soma',periodo:g.periodo||'dia',por:g.por};
-  montarControlesGrafico();loadLinhas();loadGrafico();
+  atualizarBotaoPriv();montarControlesGrafico();loadLinhas();loadGrafico();
 }
 $('#tadd').onclick=async()=>{
   const valores={};document.querySelectorAll('#tform [data-c]').forEach(i=>{if(i.value.trim())valores[i.dataset.c]=i.value.trim()});
   try{
-    const j=await call('/tabelas/'+TB.atual,'POST',{valores});toast(j.mensagem);
+    const j=await call('/tabelas/'+TB.atual,'POST',{valores});toast(OCULTA&&temDinheiro(tabAtual())?'Registrado.':j.mensagem);
     document.querySelectorAll('#tform input:not([type=date])').forEach(i=>i.value='');
     loadLinhas();loadGrafico();
   }catch(e){toast(e.message)}
@@ -735,7 +761,7 @@ async function loadLinhas(){
     const r=el('tr');
     t.colunas.forEach(c=>{
       let v=L[c.nome];
-      if(c.tipo==='data'&&v)v=v.split('-').reverse().join('/');else if(c.tipo==='num')v=num(v);
+      if(c.tipo==='data'&&v)v=v.split('-').reverse().join('/');else if(c.tipo==='num')v=(OCULTA&&ehDinheiro(c))?'••••':num(v);
       r.append(el('td',null,v==null?'':v));
     });
     const x=el('button','x','✕');x.setAttribute('aria-label','Apagar registro');
@@ -760,6 +786,7 @@ function montarControlesGrafico(){
 }
 async function loadGrafico(){
   const box=$('#gbox'),G=TB.graf;box.textContent='';
+  if(OCULTA&&ehDinheiro(tabAtual().colunas.find(c=>c.nome===G.y))){box.append(el('p','hint','🙈 Valores ocultos. Clique em "mostrar" acima para ver o gráfico.'));return}
   const q=new URLSearchParams({y:G.y,agg:G.agg,periodo:G.periodo});if(G.por)q.set('por',G.por);
   let d;try{d=await call('/grafico/'+TB.atual+'?'+q)}catch(e){box.append(el('p','hint',e.message));return}
   if(!d.rotulos.length){box.append(el('p','hint','Sem dados nos últimos 120 dias.'));return}

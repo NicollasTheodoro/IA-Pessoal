@@ -4,6 +4,10 @@ Alice no terminal (voz ou texto). Para a interface web, use o server.py.
 import re
 import time
 
+from brain.saida import forcar_utf8
+
+forcar_utf8()
+
 from brain.actions import Think
 from brain.personality import Personality
 

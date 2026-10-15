@@ -43,6 +43,20 @@ O microfone e o Whisper são os do `server.py` (os mesmos da "Chamada" da interf
 precisa de `pip install faster-whisper sounddevice`, que o projeto já usava. O pet carrega o
 Whisper ao abrir, então o primeiro clique não espera.
 
+### Falar com uma tecla (sem usar o mouse)
+Botão direito no pet > **⌨ Tecla para falar…**, depois aperte a tecla ou combinação que quiser
+(ex.: `F9`, `Ctrl+Alt+Espaço`, `Pause`). Pronto: apertar essa tecla faz **exatamente o mesmo que
+clicar no 🎤** (começa a ouvir; apertar de novo cancela; durante a resposta, interrompe e ouve).
+
+- Vale **de qualquer programa**, inclusive com o pet escondido na bandeja (ele aparece ao ouvir).
+- Fica salva em `~/.alice_pet.json` (`"tecla": "f9"`). Para tirar: menu > 🚫 Tirar a tecla de falar.
+- Só Windows (usa o `RegisterHotKey` do próprio sistema: sem biblioteca extra e sem ficar
+  espiando o teclado, só avisa quando a combinação escolhida é apertada).
+- Teclas comuns sozinhas (uma letra, Espaço, Enter, setas) são recusadas, porque roubariam
+  a tecla do Windows inteiro. Sozinhas valem F1 a F24, Pause, ScrollLock e PrintScreen; as outras
+  precisam de Ctrl, Alt, Shift ou Win junto.
+- Se outro programa já usa a combinação, ela avisa e continua com a anterior. Escolha outra.
+
 ### Como ela percebe que você parou de falar
 `IA/audio/vad.py` (usado pelo `listener.py`), com três cuidados:
 - **Ruído de fundo**: o limiar acompanha o barulho do ambiente (ventilador, rua). Em sala
@@ -57,12 +71,19 @@ Ajustes em `IA/audio/listener.py`: `silence_time_limit` (quanto silêncio encerr
 ## O que fazer com ela
 | Ação | Resultado |
 |---|---|
-| Botão 🎤 / ⌨ | falar por voz / abrir a caixa de texto |
+| Botão 🎤 / ⌨ | falar por voz / abrir a caixa de texto (dá para esconder, veja abaixo) |
 | Clique nela | cutuca. Uma vez ela é simpática; várias seguidas e ela se irrita |
 | Duplo clique nela | abre a caixa de texto (Enter envia, Esc ou clicar fora fecha) |
 | Arrastar | muda de lugar; solta no ar e ela cai e quica |
 | Botão direito | menu: falar, digitar, calar, expressões, ritmo, dormir/acordar, tamanho, voz alta, modo chamada, olhar, passear, ações do PC, sempre por cima |
 | Ícone na bandeja | mostrar, esconder, conversar, sair |
+
+### Esconder os botões 🎤 e ⌨
+Menu > **🔘 Botões ao lado dela**: desmarque o 🎤 e/ou o ⌨, ou marque "Só aparecer quando o mouse
+estiver perto" (eles surgem quando o mouse chega nela e somem logo depois). Nada se perde: a
+tecla de atalho, o menu e o duplo clique nela continuam funcionando. Com o 🎤 oculto ele
+reaparece sozinho **enquanto** a conversa por voz está ativa (para você ver que ela está
+ouvindo e poder cancelar) e some de novo no fim.
 
 Lembretes aparecem num balão amarelo com os botões **Ok** e **+10 min** (adiar). Ela também vira
 o corpo para o lado do mouse (menu > 👀 para desligar) e, quando pula para a direita, olha para a
@@ -113,6 +134,15 @@ Para ver todas: menu do pet > Expressões, ou na interface web o painel "Express
   aponte `sprite` da emoção em `EMOCOES`; pet e navegador passam a usar.
 - Tamanho, passear, posição: salvos em `~/.alice_pet.json`.
 
+## Se algo der errado
+- **`'charmap' codec can't encode character '\U0001f3a7'`** (erro do microfone): corrigido. Acontecia
+  quando o servidor era ligado sem console e o Python do Windows tentava imprimir um emoji em
+  cp1252. Agora a saída é sempre UTF-8 (`IA/brain/saida.py`), no servidor, no pet e no microfone,
+  e o servidor que o pet liga já recebe UTF-8. Se ainda ver esse erro, reinicie o servidor
+  (o antigo pode estar rodando em segundo plano).
+- **A tecla de atalho não faz nada**: outro programa pode estar usando a combinação (o pet avisa
+  num balão ao abrir); escolha outra no menu.
+
 ## Limites
 - 10 poses sem boca animada: a "vida" vem de troca de pose, movimento e partículas.
 - Os sprites têm 320 px: em "Enorme" ficam um pouco suaves.
@@ -129,4 +159,4 @@ Para ver todas: menu do pet > Expressões, ou na interface web o painel "Express
 
 ## Testes
 Dentro da pasta `IA`:
-`python -m unittest testes.test_emocoes testes.test_integracao_pet testes.test_pet_logic testes.test_pet_janela testes.test_voz`
+`python -m unittest testes.test_emocoes testes.test_integracao_pet testes.test_pet_logic testes.test_pet_janela testes.test_voz testes.test_hotkey testes.test_saida`

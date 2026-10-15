@@ -5,6 +5,9 @@ import sounddevice as sd
 from faster_whisper import WhisperModel
 
 from audio.vad import Vad
+from brain.saida import forcar_utf8
+
+forcar_utf8()  # os prints com emoji (🎧 🗣 🤫) quebravam com saída redirecionada no Windows
 
 
 class Listener:

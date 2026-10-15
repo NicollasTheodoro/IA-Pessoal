@@ -516,6 +516,52 @@ class Geometria(unittest.TestCase):
         self.assertFalse(L.eh_lembrete("✓ Aberto o YouTube"))
 
 
+class VisibilidadeDosBotoes(unittest.TestCase):
+    def cfg(self, **kw):
+        return {**L.PADRAO, **kw}
+
+    def test_por_padrao_os_dois_aparecem(self):
+        self.assertEqual(L.botoes_visiveis(self.cfg()), {"mic": True, "texto": True})
+
+    def test_cada_botao_pode_ser_ocultado_separadamente(self):
+        self.assertEqual(L.botoes_visiveis(self.cfg(btn_texto=False)), {"mic": True, "texto": False})
+        self.assertEqual(L.botoes_visiveis(self.cfg(btn_mic=False)), {"mic": False, "texto": True})
+        self.assertEqual(L.botoes_visiveis(self.cfg(btn_mic=False, btn_texto=False)), {"mic": False, "texto": False})
+
+    def test_so_ao_passar_o_mouse(self):
+        c = self.cfg(btn_hover=True)
+        self.assertEqual(L.botoes_visiveis(c, perto=False), {"mic": False, "texto": False})
+        self.assertEqual(L.botoes_visiveis(c, perto=True), {"mic": True, "texto": True})
+        c = self.cfg(btn_hover=True, btn_texto=False)
+        self.assertEqual(L.botoes_visiveis(c, perto=True), {"mic": True, "texto": False}, "oculto continua oculto")
+
+    def test_mic_reaparece_enquanto_a_voz_esta_ativa(self):
+        c = self.cfg(btn_mic=False)
+        self.assertFalse(L.botoes_visiveis(c, voz_ativa=False)["mic"])
+        self.assertTrue(L.botoes_visiveis(c, voz_ativa=True)["mic"])
+        c = self.cfg(btn_mic=False, btn_hover=True)
+        self.assertTrue(L.botoes_visiveis(c, voz_ativa=True, perto=False)["mic"])
+        self.assertFalse(L.botoes_visiveis(c, voz_ativa=True, perto=False)["texto"], "o ⌨ não reaparece")
+
+    def test_botao_oculto_nao_recebe_clique(self):
+        lay = L.layout(0.7)
+        mx, my, _ = L.botoes(lay)["mic"]
+        tx, ty, _ = L.botoes(lay)["texto"]
+        self.assertEqual(L.botao_em(lay, mx, my, {"mic": True, "texto": True}), "mic")
+        self.assertIsNone(L.botao_em(lay, mx, my, {"mic": False, "texto": True}))
+        self.assertIsNone(L.botao_em(lay, tx, ty, {"mic": True, "texto": False}))
+        self.assertEqual(L.botao_em(lay, mx, my), "mic", "sem filtro, comporta-se como antes")
+
+    def test_novas_opcoes_de_config(self):
+        cfg = L.carregar_config(os.path.join(tempfile.mkdtemp(), "novo.json"))
+        self.assertEqual((cfg["tecla"], cfg["btn_mic"], cfg["btn_texto"], cfg["btn_hover"]), ("", True, True, False))
+        d = os.path.join(tempfile.mkdtemp(), "pet.json")
+        cfg.update(tecla="ctrl+alt+space", btn_texto=False)
+        L.salvar_config(cfg, d)
+        volta = L.carregar_config(d)
+        self.assertEqual((volta["tecla"], volta["btn_texto"], volta["btn_mic"]), ("ctrl+alt+space", False, True))
+
+
 class Olhar(unittest.TestCase):
     def test_vira_para_o_lado_do_mouse_com_folga(self):
         f = L.virar_para

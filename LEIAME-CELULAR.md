@@ -66,6 +66,14 @@ do ntfy.sh, então evite coisas sensíveis nos lembretes se isso te incomoda.
 Tudo também pode ser lançado à mão na aba **Planilhas** (com gráfico, lista e
 botão de CSV, que abre direto no Excel).
 
+### Esconder o dinheiro na tela
+No **Painel**, o cartão "Ganhos no mês" tem um olhinho (👁 / 🙈). Clique para ocultar: o valor vira
+`R$ ••••••`. O mesmo interruptor vale na aba **Planilhas > Financeiro** (coluna de valores e
+gráfico ocultos, e a confirmação de "Registrado" não mostra o valor). A escolha fica salva no
+navegador, então vale também depois de recarregar a página. Cada aparelho (PC, celular) guarda a sua.
+Atenção: isso esconde só a **tela**. Se você perguntar "quanto ganhei?", a Alice responde com o
+valor, e o CSV exportado e o arquivo `dados/alice.db` continuam com os números.
+
 ## 3. Limites que vale saber
 - **Macros são estimativas.** A conta é feita pelo Python com uma tabela de ~45
   alimentos brasileiros (`brain/nutricao.py`, valores aproximados). Alimento fora
