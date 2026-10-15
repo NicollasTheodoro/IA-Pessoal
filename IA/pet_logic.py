@@ -18,6 +18,14 @@ SPRITE_PX = 320  # tamanho original dos sprites (static/pet/*.png)
 
 
 # ======================================================================== servidor
+class ErroServidor(Exception):
+    """O servidor respondeu com erro (ex.: 501 'microfone indisponível'); .status e a mensagem dele."""
+
+    def __init__(self, status, mensagem):
+        super().__init__(mensagem)
+        self.status = status
+
+
 class Cliente:
     """Fala com o server.py da Alice (mesmos endpoints que a interface web usa)."""
 
@@ -29,8 +37,15 @@ class Cliente:
         dados = json.dumps(corpo).encode("utf-8") if corpo is not None else (b"{}" if metodo == "POST" else None)
         req = urllib.request.Request(self.base + caminho, data=dados, method=metodo,
                                      headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=timeout or self.timeout) as r:
-            return json.loads(r.read().decode("utf-8") or "{}")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout or self.timeout) as r:
+                return json.loads(r.read().decode("utf-8") or "{}")
+        except urllib.error.HTTPError as e:
+            try:
+                msg = json.loads(e.read().decode("utf-8")).get("error") or str(e)
+            except Exception:
+                msg = str(e)
+            raise ErroServidor(e.code, msg) from None
 
     def no_ar(self):
         try:
@@ -61,6 +76,26 @@ class Cliente:
 
     def acordar(self):
         return self._req("POST", "/pet/acordar")
+
+    # --- voz: o microfone é o do PC (Whisper no servidor), o pet só comanda e mostra
+    def ouvir(self, espera=10):
+        """Abre o microfone até a pessoa falar e ficar em silêncio. Devolve {'texto': ... ou None}. Bloqueia."""
+        return self._req("POST", f"/ouvir?espera={float(espera)}", timeout=float(espera) + 60)
+
+    def ouvir_cancelar(self):
+        return self._req("POST", "/ouvir/cancelar")
+
+    def ouvir_estado(self):
+        return self._req("GET", "/ouvir/estado", timeout=1.5)
+
+    def ouvir_preparar(self):
+        return self._req("POST", "/ouvir/preparar")
+
+    def parar_fala(self):
+        return self._req("POST", "/stop")
+
+    def adiar(self, texto, minutos=10):
+        return self._req("POST", "/agenda", {"quando": f"daqui a {int(minutos)} minutos", "texto": texto})
 
     def conversar(self, mensagem, falar=True, acoes=True, timeout=600):
         """Gera (evento, dados) do stream SSE do /chat até o fim da resposta."""
@@ -101,7 +136,12 @@ def garantir_servidor(cliente, server_py, cwd, espera=45):
 
 # ======================================================================== configuração
 PADRAO = {"escala": 0.7, "x": None, "y": None, "topo": True, "passear": True, "acoes": True,
-          "servidor": "http://127.0.0.1:5000"}
+          "servidor": "http://127.0.0.1:5000",
+          "voz": True,        # a Alice fala as respostas em voz alta
+          "chamada": False,   # depois que ela responde, abre o microfone de novo sozinha
+          "olhar": True,      # vira para o lado do mouse
+          "espera": 10,       # segundos esperando você começar a falar, antes de desistir
+          "preparar_ouvido": True}  # carrega o Whisper ao abrir o pet (o 1º clique no microfone não espera)
 
 
 def caminho_config():
@@ -370,3 +410,126 @@ def pop(u):
         return 0.9 + 0.17 * k, 1.08 - 0.12 * k
     k = (u - 0.55) / 0.45
     return 1.07 - 0.07 * k, 0.96 + 0.04 * k
+
+
+# ======================================================================== voz (botão de microfone)
+# Estados do que o pet mostra no botão:
+#   parado -> (clique) -> preparando|ouvindo -> gravando (detectou voz) -> transcrevendo -> pensando -> falando -> parado
+ESTADOS_VOZ = ("parado", "preparando", "ouvindo", "gravando", "transcrevendo", "pensando", "falando")
+
+
+def acao_clique_mic(estado):
+    """O que um clique no microfone faz em cada estado."""
+    if estado == "parado":
+        return "iniciar"        # começa a ouvir; ao detectar que você parou de falar, envia sozinho
+    if estado in ("pensando", "falando"):
+        return "interromper"    # cala a Alice e já abre o microfone para você falar
+    return "cancelar"           # estava ouvindo/preparando/transcrevendo: desiste
+
+
+def estado_do_servidor(est):
+    """Traduz /ouvir/estado para o estado do botão (None se o microfone está fechado)."""
+    if not est.get("ativo"):
+        return None
+    if est.get("carregando") or not est.get("pronto"):
+        return "preparando"     # primeira vez: o Whisper ainda está carregando
+    return {"gravando": "gravando", "transcrevendo": "transcrevendo"}.get(est.get("estado"), "ouvindo")
+
+
+class Chamada:
+    """Modo chamada: ela volta a ouvir sozinha depois de responder, até a pessoa ficar muda."""
+    MAX_VAZIOS = 2
+
+    def __init__(self):
+        self.ativa, self.vazios = False, 0
+
+    def ligar(self):
+        self.ativa, self.vazios = True, 0
+
+    def desligar(self):
+        self.ativa, self.vazios = False, 0
+
+    def ouviu(self, texto):
+        self.vazios = 0 if texto else self.vazios + 1
+
+    def continuar(self):
+        return self.ativa and self.vazios < self.MAX_VAZIOS
+
+    def encerrou_por_silencio(self):
+        return self.ativa and self.vazios >= self.MAX_VAZIOS
+
+
+def escala_nivel(volume, limiar=0.01):
+    """Volume RMS do microfone -> 0..1 para o anel (raiz: voz baixa ainda mexe o anel)."""
+    if volume <= 0:
+        return 0.0
+    return min(1.0, (volume / (max(limiar, 1e-4) * 8)) ** 0.5)
+
+
+def suavizar(anterior, novo, subida=0.55, descida=0.12):
+    """Sobe rápido e desce devagar, como um medidor de volume."""
+    k = subida if novo > anterior else descida
+    return anterior + (novo - anterior) * k
+
+
+# ======================================================================== geometria dos botões
+def botoes(lay):
+    """Botões desenhados junto aos pés dela (lado oposto ao rabo): {nome: (cx, cy, raio)} na janela."""
+    r = max(14, int(lay.sprite_w * 0.065))
+    cx = lay.janela_w / 2 - lay.sprite_w * 0.40
+    cy = lay.janela_h - lay.margem - lay.sprite_h * 0.13
+    return {"mic": (cx, cy, r), "texto": (cx + 2.3 * r, cy + 0.15 * r, r * 0.78)}
+
+
+def dentro_circulo(c, x, y, folga=2):
+    cx, cy, r = c
+    return math.hypot(x - cx, y - cy) <= r + folga
+
+
+def dentro_rect(rc, x, y):
+    x0, y0, w, h = rc
+    return x0 <= x <= x0 + w and y0 <= y <= y0 + h
+
+
+def botao_em(lay, x, y):
+    """Qual botão está nesse ponto da janela ('mic', 'texto') ou None."""
+    for nome, c in botoes(lay).items():
+        if dentro_circulo(c, x, y):
+            return nome
+    return None
+
+
+# ======================================================================== lembretes no balão
+def eh_lembrete(texto):
+    return texto.strip().lstrip("⏰").strip().lower().startswith("lembrete")
+
+
+def limpar_lembrete(texto):
+    """'⏰ Lembrete atrasado: beber água' -> 'beber água'."""
+    t = texto.strip().lstrip("⏰").strip()
+    for pre in ("Lembrete atrasado:", "Lembrete:"):
+        if t.lower().startswith(pre.lower()):
+            return t[len(pre):].strip()
+    return t
+
+
+def rects_aviso(x, y, larg, alt):
+    """Botões 'Ok' e '+10 min' na faixa de baixo do balão de lembrete: {nome: (x, y, w, h)}."""
+    h, w_ok, w_mais, folga = 22, 44, 76, 8
+    topo = y + alt - h - 6
+    total = w_ok + folga + w_mais
+    x0 = x + (larg - total) / 2
+    return {"ok": (x0, topo, w_ok, h), "mais": (x0 + w_ok + folga, topo, w_mais, h)}
+
+
+# ======================================================================== olhar
+def virar_para(cursor_x, centro_x, atual, margem=140):
+    """
+    Os sprites olham para a ESQUERDA da tela (rabo à direita). Espelhar (True) faz ela olhar para a
+    direita. Só vira quando o mouse passa de `margem` px do centro (evita ficar piscando de lado).
+    """
+    if cursor_x > centro_x + margem:
+        return True
+    if cursor_x < centro_x - margem:
+        return False
+    return atual

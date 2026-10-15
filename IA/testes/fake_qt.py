@@ -80,6 +80,18 @@ class Rect:
 
 class QTimer(QObject):
     timeout = Signal()
+    pendentes = []  # singleShot(ms, f) guarda aqui; o teste decide quando "passa o tempo"
+
+    @staticmethod
+    def singleShot(ms, f):
+        QTimer.pendentes.append((ms, f))
+
+    @staticmethod
+    def executar_pendentes():
+        fila, QTimer.pendentes = QTimer.pendentes, []
+        for _, f in fila:
+            f()
+
     def __init__(self, *a):
         self.ativo, self.ms = False, None
     def setSingleShot(self, v): self.unico = v
@@ -100,6 +112,9 @@ class QWidget(QObject):
     def setWindowFlag(self, f, v=True): pass
     def setAttribute(self, a): pass
     def setWindowTitle(self, t): pass
+    def setMouseTracking(self, v): pass
+    def setCursor(self, c): self.cursor = c
+    def leaveEvent(self, e): pass
     def setFixedSize(self, w, h): self._size = (w, h)
     def width(self): return self._size[0]
     def height(self): return self._size[1]
@@ -213,11 +228,13 @@ class QFontMetrics:
     def __init__(self, f): pass
     def horizontalAdvance(self, s): return len(s) * 7
     def lineSpacing(self): return 16
+    def height(self): return 16
     def ascent(self): return 12
 
 
 class QColor:
     def __init__(self, *a): pass
+    def setAlpha(self, a): self.alpha = a
 
 
 class QPen:
@@ -252,8 +269,10 @@ class QGuiApplication:
 
 
 class QCursor:
+    posicao = QPoint(500, 500)
+
     @staticmethod
-    def pos(): return QPoint(500, 500)
+    def pos(): return QCursor.posicao
 
 
 def instalar():

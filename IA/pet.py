@@ -5,8 +5,10 @@ Desktop pet da Alice: ela vive na sua tela, sempre por cima, e usa as mesmas exp
     python IA/pet.py             (liga o servidor sozinho se ele ainda não estiver no ar)
 
 O que dá para fazer:
+    botão 🎤            conversa por voz: clique, fale, e ela percebe sozinha quando você para
+                        (clique de novo para falar outra vez; durante a resposta, interrompe e escuta)
+    botão ⌨             abre a caixa de texto (também: duplo clique nela)
     clique              cutuca (1x simpática, várias seguidas ela se irrita)
-    duplo clique        abre a caixa de texto para conversar (Enter envia, Esc fecha)
     arrastar            muda de lugar; ao soltar no ar ela cai e quica
     botão direito       menu: conversar, expressões, ritmo, tamanho, passear, dormir...
     ícone na bandeja    mostrar/esconder, conversar, sair
@@ -15,6 +17,7 @@ Toda a lógica (conversa com o servidor, fila de expressões, movimentos, físic
 este arquivo só desenha a janela e repassa os eventos.
 """
 import argparse
+import math
 import os
 import random
 import sys
@@ -47,6 +50,11 @@ class Ponte(QtCore.QObject):
     sync = Signal(object)      # estado atual (primeira conexão ou servidor reiniciado)
     online = Signal(bool)
     texto = Signal(str, str)   # (mensagem, tipo) para o balão: resultados de ação, erros
+    nivel = Signal(object)     # /ouvir/estado enquanto o microfone está aberto (anel de volume)
+    voz_texto = Signal(str)    # o que o microfone entendeu ('' se ninguém falou)
+    voz_erro = Signal(int, str)  # (status http, mensagem)
+    voz = Signal(str)          # novo estado do botão (pensando/falando) vindo da conversa
+    chat_fim = Signal(bool)    # a resposta terminou (True se a pergunta veio por voz)
 
 
 class CaixaTexto(QtWidgets.QWidget):
@@ -112,6 +120,7 @@ class JanelaPet(QtWidgets.QWidget):
         self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setMouseTracking(True)  # para destacar os botões quando o mouse passa
         self.setWindowTitle("Alice")
 
         # --- estado
@@ -124,6 +133,12 @@ class JanelaPet(QtWidgets.QWidget):
         self.particulas, self.fisica = L.Particulas(self.rng), L.Fisica()
         self.passeio, self.salto = L.Passeio(self.rng, agora), None
         self.arrastando, self._press, self._offset, self._moveu = False, None, None, False
+        self._press_alvo, self._hover, self._rects_aviso = None, None, {}
+        # voz
+        self.voz_estado, self.chamada = "parado", L.Chamada()
+        self.mic_disponivel, self.mic_pronto = None, False   # None = ainda não sei
+        self.nivel, self.nivel_alvo, self.t_voz = 0.0, 0.0, agora
+        self._gen_escuta, self._gen_chat, self._t_olhar = 0, 0, 0.0
         self._ultimo, self._offline_avisado = agora, False
         self._cache = {}
 
@@ -135,6 +150,11 @@ class JanelaPet(QtWidgets.QWidget):
         self.ponte.sync.connect(self.on_sync)
         self.ponte.online.connect(self.on_online)
         self.ponte.texto.connect(lambda t, tipo: self.balao.mostrar(t, 6 + len(t) / 20, time.time(), tipo))
+        self.ponte.nivel.connect(self.on_nivel)
+        self.ponte.voz_texto.connect(self.on_voz_texto)
+        self.ponte.voz_erro.connect(self.on_voz_erro)
+        self.ponte.voz.connect(self.on_voz)
+        self.ponte.chat_fim.connect(self.on_chat_fim)
         self.caixa = CaixaTexto()
         self.caixa.enviado.connect(self.enviar)
         self._clique = QtCore.QTimer(self)
@@ -211,9 +231,21 @@ class JanelaPet(QtWidgets.QWidget):
     def on_online(self, ok):
         if ok:
             self._offline_avisado = False
+            if self.mic_disponivel is None:
+                threading.Thread(target=self._descobrir_ouvido, daemon=True).start()
         elif not self._offline_avisado:
             self._offline_avisado = True
             self.balao.mostrar("Perdi a conexão com a Alice (servidor). Vou tentando de novo…", 8, time.time(), "aviso")
+
+    def _descobrir_ouvido(self):
+        """Pergunta se o servidor tem microfone e já carrega o Whisper (o 1º clique no 🎤 não espera)."""
+        try:
+            est = self.cliente.ouvir_estado()
+            self.mic_disponivel, self.mic_pronto = bool(est.get("ouvido")), bool(est.get("pronto"))
+            if self.mic_disponivel and not self.mic_pronto and self.cfg["preparar_ouvido"]:
+                self.cliente.ouvir_preparar()
+        except Exception:
+            pass
 
     def _aplicar(self, ev):
         agora = time.time()
@@ -262,21 +294,156 @@ class JanelaPet(QtWidgets.QWidget):
         x = max(geo.left(), min(x, geo.right() + 1 - self.caixa.width()))
         self.caixa.abrir(QtCore.QPoint(x, max(geo.top(), y)))
 
-    def enviar(self, texto):
-        self.balao.mostrar("…", 90, time.time(), "pensando")  # some quando a primeira frase chegar
+    def enviar(self, texto, por_voz=False):
+        agora = time.time()
+        if not por_voz and self.voz_estado in ("preparando", "ouvindo", "gravando", "transcrevendo"):
+            self.cancelar_escuta()  # digitou enquanto o microfone estava aberto
+        self._gen_chat += 1
+        gen = self._gen_chat
+        if not por_voz:
+            self.balao.mostrar("…", 90, agora, "pensando")  # some quando a primeira frase chegar
         if self.emo == "dormindo":
             self._async(self.cliente.acordar)
 
         def conversar():
+            primeira = True
             try:
-                for nome, d in self.cliente.conversar(texto, falar=True, acoes=self.cfg["acoes"]):
-                    if nome == "acao" and d.get("resultado"):
+                for nome, d in self.cliente.conversar(texto, falar=self.cfg["voz"], acoes=self.cfg["acoes"]):
+                    if gen != self._gen_chat:
+                        break  # foi interrompida (ou veio outra pergunta): fecha a conexão
+                    if nome == "sentence" and primeira:
+                        primeira = False
+                        self.ponte.voz.emit("falando")
+                    elif nome == "acao" and d.get("resultado"):
                         self.ponte.texto.emit("✓ " + str(d["resultado"])[:140], "aviso")
                     elif nome == "erro":
                         self.ponte.texto.emit("⚠ " + str(d.get("error", "erro"))[:140], "aviso")
             except Exception as e:
                 self.ponte.texto.emit(f"Não consegui falar com o servidor: {e}", "aviso")
+            finally:
+                if gen == self._gen_chat:
+                    self.ponte.chat_fim.emit(por_voz)
         threading.Thread(target=conversar, daemon=True).start()
+
+    def on_voz(self, estado):
+        if self.voz_estado in ("pensando", "falando"):  # não atropela uma nova escuta
+            self._set_voz(estado)
+
+    def on_chat_fim(self, por_voz):
+        if self.voz_estado in ("pensando", "falando"):
+            self._set_voz("parado")
+        if por_voz and self.chamada.continuar():  # modo chamada: ela terminou de falar, volta a ouvir
+            QtCore.QTimer.singleShot(400, self._reabrir_chamada)
+
+    def _reabrir_chamada(self):
+        if self.voz_estado == "parado" and self.chamada.ativa:
+            self.iniciar_escuta()
+
+    # ------------------------------------------------------------------ voz (microfone do PC)
+    _DICA_VOZ = {"preparando": "⏳ Preparando o ouvido…", "ouvindo": "🎧 Pode falar…",
+                 "gravando": "🎧 Te ouvindo…", "transcrevendo": "🧠 Entendendo…"}
+
+    def _set_voz(self, estado):
+        if estado == self.voz_estado:
+            return
+        self.voz_estado, self.t_voz = estado, time.time()
+        if estado == "parado":
+            self.nivel_alvo = 0.0
+        if estado in self._DICA_VOZ:
+            self.balao.mostrar(self._DICA_VOZ[estado], 90, time.time(), "ouvindo")
+        elif self.balao.tipo == "ouvindo":
+            self.balao.fechar()
+
+    def clique_mic(self):
+        if self.mic_disponivel is False:
+            self.balao.mostrar("Para falar comigo: pip install faster-whisper sounddevice e reinicie o servidor.",
+                               8, time.time(), "aviso")
+            return
+        acao = L.acao_clique_mic(self.voz_estado)
+        if acao == "cancelar":
+            self.chamada.desligar()
+            self.cancelar_escuta()
+            return
+        if acao == "interromper":
+            self._gen_chat += 1  # solta a resposta que estava chegando
+            self._async(self.cliente.parar_fala)
+        if self.cfg["chamada"]:
+            self.chamada.ligar()
+        self.iniciar_escuta()
+
+    def iniciar_escuta(self):
+        self._gen_escuta += 1
+        gen = self._gen_escuta
+        self._set_voz("ouvindo" if self.mic_pronto else "preparando")
+        threading.Thread(target=self._escutar, args=(gen,), daemon=True).start()
+        threading.Thread(target=self._acompanhar_nivel, args=(gen,), daemon=True).start()
+
+    def cancelar_escuta(self):
+        self._gen_escuta += 1  # a resposta do servidor (se vier) é descartada
+        self._set_voz("parado")
+        self.balao.fechar()
+        self._async(self.cliente.ouvir_cancelar)
+
+    def _escutar(self, gen):
+        """Thread: abre o microfone no servidor e espera. Ele mesmo percebe quando você parou de falar."""
+        try:
+            r = self.cliente.ouvir(espera=self.cfg["espera"])
+        except L.ErroServidor as e:
+            if gen == self._gen_escuta:
+                self.ponte.voz_erro.emit(e.status, str(e))
+            return
+        except Exception as e:
+            if gen == self._gen_escuta:
+                self.ponte.voz_erro.emit(0, f"Não consegui falar com o servidor: {e}")
+            return
+        if gen != self._gen_escuta:
+            return  # cancelado enquanto ouvia
+        self._gen_escuta += 1  # encerra o acompanhamento do volume
+        self.ponte.voz_texto.emit((r.get("texto") or "").strip())
+
+    def _acompanhar_nivel(self, gen):
+        while gen == self._gen_escuta and not self._parar.is_set():
+            try:
+                self.ponte.nivel.emit(self.cliente.ouvir_estado())
+            except Exception:
+                pass
+            self._parar.wait(0.12)
+
+    def on_nivel(self, est):
+        if self.voz_estado not in ("preparando", "ouvindo", "gravando", "transcrevendo"):
+            return  # chegou atrasado: já cancelou ou terminou
+        self.mic_pronto = bool(est.get("pronto"))
+        st = L.estado_do_servidor(est)
+        if st:
+            self._set_voz(st)
+        self.nivel_alvo = L.escala_nivel(est.get("nivel", 0.0), est.get("limiar", 0.01)) if st in ("ouvindo", "gravando") else 0.0
+
+    def on_voz_texto(self, texto):
+        agora = time.time()
+        self.chamada.ouviu(texto)
+        if not texto:
+            if self.chamada.ativa and not self.chamada.encerrou_por_silencio():
+                self.iniciar_escuta()  # em chamada, uma vez em silêncio ainda tenta de novo
+                return
+            msg = ("Encerrei a chamada porque não ouvi nada. Clique no 🎤 para falar."
+                   if self.chamada.encerrou_por_silencio() else "Não ouvi nada. Clique no 🎤 e tente de novo.")
+            self.chamada.desligar()
+            self._set_voz("parado")
+            self.balao.mostrar(msg, 5, agora, "aviso")
+            return
+        self.balao.mostrar("🎤 " + texto, 90, agora, "voce")  # mostra o que ela entendeu (some quando ela responder)
+        self._set_voz("pensando")
+        self.enviar(texto, por_voz=True)
+
+    def on_voz_erro(self, status, msg):
+        self.chamada.desligar()
+        self._set_voz("parado")
+        if status == 501:
+            self.mic_disponivel = False
+            msg = "Microfone indisponível no servidor: pip install faster-whisper sounddevice e reinicie."
+        elif status == 409:
+            msg = "O microfone já está em uso (talvez pela interface web)."
+        self.balao.mostrar(msg, 7, time.time(), "aviso")
 
     # ------------------------------------------------------------------ vida (a cada quadro)
     def tick(self):
@@ -287,6 +454,10 @@ class JanelaPet(QtWidgets.QWidget):
         if ev:
             self._aplicar(ev)
         self._mover(agora, dt)
+        self.nivel = L.suavizar(self.nivel, self.nivel_alvo)
+        if self.cfg["olhar"] and not self.salto and not self.arrastando and agora - self._t_olhar > 0.25:
+            self._t_olhar = agora
+            self.virado = L.virar_para(QtGui.QCursor.pos().x(), self.x() + self.width() / 2, self.virado)
         self.particulas.atualizar(agora)
         if self.balao.tipo == "pensando" and not self.balao.visivel(agora):
             self.balao.texto = ""
@@ -318,7 +489,7 @@ class JanelaPet(QtWidgets.QWidget):
         s = self.passeio.decidir(agora, self.emo, livre, pos.x(), geo.left(), geo.right() + 1, self.width(),
                                  chao, self.cfg["passear"])
         if s:
-            self.salto, self.virado = s, s.x1 < s.x0
+            self.salto, self.virado = s, s.x1 > s.x0  # sprite olha p/ esquerda: espelha ao ir para a direita
 
     # ------------------------------------------------------------------ desenho
     def paintEvent(self, _):
@@ -362,10 +533,80 @@ class JanelaPet(QtWidgets.QWidget):
             p.drawText(QtCore.QPointF(cx - Lay.sprite_w / 2 + fx * Lay.sprite_w, topo + fy * Lay.sprite_h), ch)
         p.setOpacity(1.0)
 
+        self._desenhar_botoes(p, agora)
         self._desenhar_balao(p, agora, cx, topo)
         p.end()
 
+    _COR_VOZ = {"parado": "#ff5c93", "preparando": "#8f86a8", "ouvindo": "#5fd0c0", "gravando": "#ff4d4d",
+                "transcrevendo": "#ffd95a", "pensando": "#b79bff", "falando": "#ff5c93"}
+    _ICONE_VOZ = {"preparando": "⏳", "transcrevendo": "⏳", "pensando": "💭", "falando": "⏹"}
+    _ROTULO_MIC = {"parado": "Falar", "preparando": "Preparando… (clique p/ cancelar)",
+                   "ouvindo": "Ouvindo… (clique p/ cancelar)", "gravando": "Te ouvindo…",
+                   "transcrevendo": "Entendendo…", "pensando": "Interromper e falar", "falando": "Interromper e falar"}
+
+    def _cor(self, hex_, alpha=255):
+        c = QtGui.QColor(hex_)
+        c.setAlpha(alpha)
+        return c
+
+    def _texto_centrado(self, p, texto, cx, cy, tamanho, fonte="Segoe UI Emoji"):
+        f = QtGui.QFont(fonte, tamanho)
+        p.setFont(f)
+        fm = QtGui.QFontMetrics(f)
+        p.drawText(QtCore.QPointF(cx - fm.horizontalAdvance(texto) / 2, cy + fm.ascent() / 2 - 2), texto)
+
+    def _desenhar_botoes(self, p, agora):
+        """🎤 e ⌨ junto aos pés dela. O 🎤 mostra o estado da conversa por voz e o volume da sua voz."""
+        for nome, (cx, cy, r) in L.botoes(self.L).items():
+            mic = nome == "mic"
+            estado = self.voz_estado if mic else "parado"
+            indisponivel = mic and self.mic_disponivel is False
+            ativo = estado != "parado"
+            p.setOpacity(1.0 if (ativo or self._hover == nome) else (0.3 if indisponivel else 0.55))
+            cor = self._COR_VOZ[estado] if mic else "#ff5c93"
+            pulso = 0.5 + 0.5 * math.sin((agora - self.t_voz) * 6)
+
+            # anel que reage à sua voz (gravando) ou "respira" (ouvindo)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            if estado == "gravando":
+                rr = r * (1.15 + 0.75 * self.nivel)
+                p.setPen(QtGui.QPen(self._cor(cor, 200), 3))
+                p.drawEllipse(QtCore.QPointF(cx, cy), rr, rr)
+            elif estado == "ouvindo":
+                rr = r * (1.2 + 0.18 * pulso + 0.5 * self.nivel)
+                p.setPen(QtGui.QPen(self._cor(cor, int(120 + 100 * pulso)), 3))
+                p.drawEllipse(QtCore.QPointF(cx, cy), rr, rr)
+            elif estado in ("preparando", "transcrevendo", "pensando"):
+                rr = r * 1.25
+                p.setPen(QtGui.QPen(self._cor(cor, 230), 3))
+                p.drawArc(QtCore.QRectF(cx - rr, cy - rr, 2 * rr, 2 * rr), int(((agora * 300) % 360) * 16), 110 * 16)
+
+            p.setPen(QtGui.QPen(self._cor(cor), 2))
+            p.setBrush(self._cor("#231a33", 235))
+            p.drawEllipse(QtCore.QPointF(cx, cy), r, r)
+            p.setPen(self._cor("#ffffff"))
+            icone = self._ICONE_VOZ.get(estado, "🎤") if mic else "⌨"
+            self._texto_centrado(p, icone, cx, cy, max(9, int(r * 0.95)))
+            if mic and self.chamada.ativa:  # selinho: modo chamada ligado
+                self._texto_centrado(p, "📞", cx + r * 0.85, cy - r * 0.85, max(7, int(r * 0.6)))
+
+            if self._hover == nome:  # rótulo do botão
+                rotulo = ("Microfone indisponível" if indisponivel else self._ROTULO_MIC[estado]) if mic else "Digitar"
+                f = QtGui.QFont("Segoe UI", 9)
+                p.setFont(f)
+                fm = QtGui.QFontMetrics(f)
+                larg = fm.horizontalAdvance(rotulo) + 16
+                x0 = min(max(4.0, cx - larg / 2), self.L.janela_w - larg - 4)
+                y0 = cy - r - fm.height() - 12
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(self._cor("#231a33", 240))
+                p.drawRoundedRect(QtCore.QRectF(x0, y0, larg, fm.height() + 6), 8, 8)
+                p.setPen(self._cor("#f6f0ff"))
+                p.drawText(QtCore.QPointF(x0 + 8, y0 + 3 + fm.ascent()), rotulo)
+        p.setOpacity(1.0)
+
     def _desenhar_balao(self, p, agora, cx, topo):
+        self._rects_aviso = {}
         b = self.balao
         if not b.visivel(agora):
             return
@@ -373,8 +614,9 @@ class JanelaPet(QtWidgets.QWidget):
         p.setFont(fonte)
         fm = QtGui.QFontMetrics(fonte)
         linhas = L.quebrar(b.texto, 260, fm.horizontalAdvance, max_linhas=5)
-        larg = max(fm.horizontalAdvance(x) for x in linhas) + 24
-        alt = len(linhas) * fm.lineSpacing() + 16
+        lembrete = b.tipo == "aviso" and L.eh_lembrete(b.texto)
+        larg = max(max(fm.horizontalAdvance(x) for x in linhas) + 24, 170 if lembrete else 0)
+        alt = len(linhas) * fm.lineSpacing() + 16 + (28 if lembrete else 0)
         x = cx - larg / 2
         y = max(4.0, topo + self.L.sprite_h * 0.04 - alt - 12)  # logo acima da cabeça
         p.setOpacity(b.alpha(agora))
@@ -387,18 +629,39 @@ class JanelaPet(QtWidgets.QWidget):
         rabinho.lineTo(cx + 8, y + alt - 1)
         rabinho.closeSubpath()
         forma = corpo.united(rabinho)
-        fundo = {"aviso": "#ffd95a", "pensando": "#efe6ff"}.get(b.tipo, "#fffafd")
+        fundo = {"aviso": "#ffd95a", "pensando": "#efe6ff", "ouvindo": "#d9fff7", "voce": "#e8f0ff"}.get(b.tipo, "#fffafd")
         p.setBrush(QtGui.QColor(fundo))
-        p.setPen(QtGui.QPen(QtGui.QColor("#ff5c93"), 2))
+        p.setPen(QtGui.QPen(QtGui.QColor("#5fd0c0" if b.tipo == "ouvindo" else "#ff5c93"), 2))
         p.drawPath(forma)
         p.setPen(QtGui.QColor("#2a0a17"))
         for i, linha in enumerate(linhas):
             p.drawText(QtCore.QPointF(x + 12, y + 8 + fm.ascent() + i * fm.lineSpacing()), linha)
+        if lembrete:  # [ Ok ] [ +10 min ]
+            self._rects_aviso = L.rects_aviso(x, y, larg, alt)
+            p.setFont(QtGui.QFont("Segoe UI", 9))
+            for nome, (bx, by, bw, bh) in self._rects_aviso.items():
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QtGui.QColor("#2a0a17"))
+                p.drawRoundedRect(QtCore.QRectF(bx, by, bw, bh), 8, 8)
+                p.setPen(QtGui.QColor("#ffd95a"))
+                self._texto_centrado(p, "Ok" if nome == "ok" else "+10 min", bx + bw / 2, by + bh / 2, 9, "Segoe UI")
         p.setOpacity(1.0)
 
     # ------------------------------------------------------------------ mouse
+    def _alvo_em(self, pos):
+        """O que está sob o mouse: botão do lembrete, 🎤, ⌨ ou nada (então é o corpo dela)."""
+        x, y = pos.x(), pos.y()
+        for nome, rc in self._rects_aviso.items():
+            if L.dentro_rect(rc, x, y):
+                return "aviso_" + nome
+        return L.botao_em(self.L, x, y)
+
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
+            alvo = self._alvo_em(e.position().toPoint())
+            if alvo:  # clicou num botão: não arrasta nem cutuca
+                self._press_alvo, self._press = alvo, None
+                return
             self._press = e.globalPosition().toPoint()
             self._offset = self._press - self.frameGeometry().topLeft()
             self._moveu = False
@@ -407,6 +670,9 @@ class JanelaPet(QtWidgets.QWidget):
 
     def mouseMoveEvent(self, e):
         if self._press is None:
+            alvo = self._alvo_em(e.position().toPoint())  # só passando o mouse: destaca o botão
+            self._hover = alvo if alvo in ("mic", "texto") else None
+            self.setCursor(Qt.CursorShape.PointingHandCursor if alvo else Qt.CursorShape.ArrowCursor)
             return
         pos = e.globalPosition().toPoint()
         if not self._moveu and (pos - self._press).manhattanLength() > 6:
@@ -417,7 +683,14 @@ class JanelaPet(QtWidgets.QWidget):
             self.move(pos - self._offset)
 
     def mouseReleaseEvent(self, e):
-        if e.button() != Qt.MouseButton.LeftButton or self._press is None:
+        if e.button() != Qt.MouseButton.LeftButton:
+            return
+        if self._press_alvo:
+            alvo, self._press_alvo = self._press_alvo, None
+            if self._alvo_em(e.position().toPoint()) == alvo:  # soltou ainda em cima do mesmo botão
+                self._acionar(alvo)
+            return
+        if self._press is None:
             return
         self._press = None
         if self._moveu:
@@ -428,8 +701,36 @@ class JanelaPet(QtWidgets.QWidget):
             self._clique.start(230)  # espera: se vier o 2º clique, é duplo clique (conversar)
 
     def mouseDoubleClickEvent(self, e):
+        if self._alvo_em(e.position().toPoint()):
+            return  # duplo clique rápido num botão conta uma vez só
         self._clique.stop()
         self.abrir_caixa()
+
+    def leaveEvent(self, e):
+        self._hover = None
+        super().leaveEvent(e)
+
+    def _acionar(self, alvo):
+        if alvo == "mic":
+            self.clique_mic()
+        elif alvo == "texto":
+            self.abrir_caixa()
+        elif alvo == "aviso_ok":
+            self.balao.fechar()
+        elif alvo == "aviso_mais":
+            self._adiar_lembrete()
+
+    def _adiar_lembrete(self):
+        texto = L.limpar_lembrete(self.balao.texto)
+        self.balao.fechar()
+
+        def adiar():
+            try:
+                self.cliente.adiar(texto, 10)
+                self.ponte.texto.emit("Tá, te aviso de novo daqui a 10 minutos.", "aviso")
+            except Exception as e:
+                self.ponte.texto.emit(f"Não consegui adiar: {e}", "aviso")
+        threading.Thread(target=adiar, daemon=True).start()
 
     def _cutucar(self):
         if self.balao.tipo == "aviso" and self.balao.visivel(time.time()):
@@ -440,11 +741,18 @@ class JanelaPet(QtWidgets.QWidget):
     # ------------------------------------------------------------------ menu e bandeja
     def _set(self, chave, valor):
         self.cfg[chave] = valor
+        if chave == "chamada" and not valor:
+            self.chamada.desligar()
         L.salvar_config(self.cfg)
+
+    def _set_gen_chat(self):
+        self._gen_chat += 1  # solta a resposta que estava chegando
 
     def _menu(self):
         m = QtWidgets.QMenu(self)
-        m.addAction("💬 Conversar…", self.abrir_caixa)
+        m.addAction("🎤 Falar (microfone)", self.clique_mic)
+        m.addAction("💬 Digitar…", self.abrir_caixa)
+        m.addAction("🔇 Calar a Alice", lambda checked=False: (self._set_gen_chat(), self._async(self.cliente.parar_fala)))
 
         exp = m.addMenu("🎭 Expressões")
         for nome, c in self.cat.items():
@@ -462,7 +770,11 @@ class JanelaPet(QtWidgets.QWidget):
         for rotulo, v in (("Pequena", 0.5), ("Média", 0.7), ("Grande", 1.0), ("Enorme", 1.4)):
             tam.addAction(rotulo, lambda checked=False, v=v: self.mudar_escala(v))
 
-        for rotulo, chave in (("🐾 Passear pela tela", "passear"), ("⚙️ Executar ações do PC ao conversar", "acoes")):
+        for rotulo, chave in (("🔊 Alice fala em voz alta", "voz"),
+                              ("📞 Modo chamada (ouve de novo depois de responder)", "chamada"),
+                              ("👀 Olhar para o mouse", "olhar"),
+                              ("🐾 Passear pela tela", "passear"),
+                              ("⚙️ Executar ações do PC ao conversar", "acoes")):
             a = m.addAction(rotulo)
             a.setCheckable(True)
             a.setChecked(bool(self.cfg[chave]))
@@ -488,7 +800,8 @@ class JanelaPet(QtWidgets.QWidget):
         menu = QtWidgets.QMenu()
         menu.addAction("Mostrar", lambda checked=False: (self.show(), self.raise_()))
         menu.addAction("Esconder", self.hide)
-        menu.addAction("Conversar…", lambda checked=False: (self.show(), self.abrir_caixa()))
+        menu.addAction("Falar 🎤", lambda checked=False: (self.show(), self.clique_mic()))
+        menu.addAction("Digitar…", lambda checked=False: (self.show(), self.abrir_caixa()))
         menu.addSeparator()
         menu.addAction("Sair", QtWidgets.QApplication.quit)
         self._menu_bandeja = menu  # precisa ficar referenciado
@@ -507,6 +820,12 @@ class JanelaPet(QtWidgets.QWidget):
         self.show()  # trocar a flag esconde a janela: precisa mostrar de novo
 
     def encerrar(self):
+        self._gen_escuta += 1
+        if self.voz_estado in ("preparando", "ouvindo", "gravando", "transcrevendo"):
+            try:
+                self.cliente.ouvir_cancelar()  # não deixa o microfone aberto no servidor
+            except Exception:
+                pass
         self._parar.set()
         self.cfg["x"] = self.x()
         L.salvar_config(self.cfg)

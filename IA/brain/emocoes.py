@@ -57,6 +57,8 @@ EMOCOES = {
     "timida":        dict(rotulo="Tímida",        sprite="timida",        mov="encolher",   part=[],             cor="#ffa6c9", hold=(5, 10)),
     "choramingando": dict(rotulo="Chorosa",       sprite="timida",        mov="tremer_leve", part=["💧"],        cor="#8ab6ff", hold=(5, 9)),
     "carente":       dict(rotulo="Carente",       sprite="timida",        mov="balancar",   part=["♥"],          cor="#b79bff", hold=(6, 12)),
+    # só aparece enquanto o microfone está aberto (ouvindo(True)); não entra no sorteio nem nas frases
+    "ouvindo":       dict(rotulo="Ouvindo",       sprite="seria",         mov="inclinar",   part=["🎧"],         cor="#5fd0c0", hold=(90, 90)),
 }
 # o que o cliente deve implementar para cada "mov":
 MOVIMENTOS = ("respirar", "inclinar", "pular_leve", "pular", "balancar", "tremer", "tremer_leve",
@@ -76,6 +78,7 @@ ALIAS = {
     "sarcastica": "desconfiada", "sarcástica": "desconfiada", "seria": "neutra", "séria": "neutra",
     "neutral": "neutra", "excited": "feliz", "irritated": "irritada", "needy": "carente",
     "carinhosa": "carente", "pensativa": "confusa", "duvida": "confusa", "dúvida": "confusa",
+    "escutando": "ouvindo", "atenta": "ouvindo",
     "bocejo": "espreguicando", "bocejando": "espreguicando", "espreguicando": "espreguicando",
 }
 BASE_DO_ESTADO = {"neutral": "neutra", "excited": "feliz", "irritated": "irritada", "needy": "carente"}
@@ -88,6 +91,7 @@ HUMOR_PROMPT = {
     "entediada": "entediada e desinteressada", "confusa": "confusa", "sonolenta": "com sono, devagar",
     "dormindo": "grogue, acabou de ser acordada", "espreguicando": "bocejando, acabou de acordar",
     "timida": "tímida e envergonhada", "choramingando": "chorosa e manhosa", "carente": "carente, pedindo atenção",
+    "ouvindo": "atenta, ouvindo você",
 }
 
 # ----------------------------------------------------------------------- ociosidade natural
@@ -114,7 +118,7 @@ VIZINHAS = {
 BASE = {"neutra": 3, "desconfiada": 1.2, "feliz": 1.5, "brincalhona": 1.2, "vitoria": 0.4, "apaixonada": 0.5,
         "ideia": 0.9, "irritada": 0.25, "entediada": 1.2, "confusa": 0.7, "sonolenta": 0.6, "timida": 0.6,
         "choramingando": 0.15, "carente": 0.5, "espreguicando": 0.3}
-NAO_SORTEIA = {"dormindo"}  # só entram pela escada do sono
+NAO_SORTEIA = {"dormindo", "ouvindo"}  # dormindo só pela escada do sono; ouvindo só com o microfone aberto
 
 T_TEDIO, T_BOCEJO, T_SONO, T_DORME = 100, 260, 330, 600  # segundos sem interação
 FATOR_NOITE = 0.5  # de madrugada o sono vem na metade do tempo
@@ -334,7 +338,7 @@ class Emocoes:
         with self._lock:
             self._frases += 1
             emo = normalizar_nome(tag) if tag else None
-            if emo in (None, "dormindo"):
+            if emo in (None, "dormindo", "ouvindo"):
                 emo = self._emocao_da_frase(texto)
             if emo is None:
                 emo = self._deriva()
@@ -356,7 +360,7 @@ class Emocoes:
 
     def _deriva(self):
         """Sem pista na frase: fica na atual, mas respostas compridas ganham uma variação sutil."""
-        base = self.atual if self.atual not in ("dormindo", "espreguicando") else self._baseline()
+        base = self.atual if self.atual not in ("dormindo", "espreguicando", "ouvindo") else self._baseline()
         if self._frases >= 2 and self.rng.random() < 0.45:
             viz = {k: v for k, v in VIZINHAS.get(base, {}).items() if k != base and k not in ("sonolenta", "espreguicando")}
             if viz:
@@ -416,6 +420,23 @@ class Emocoes:
                 if t["carinho"] >= 8:
                     pesos["apaixonada"] = 3
             self.definir(self._sortear(pesos), self.rng.uniform(4, 7), "toque", forcar=True)
+
+    def ouvindo(self, ativo, entendeu=True):
+        """Microfone aberto (ativo=True) ou fechado. Aberto, ela fica atenta e não troca sozinha;
+        ao fechar sem ter entendido nada, fica confusa por um instante."""
+        with self._lock:
+            agora = self.agora()
+            if ativo:
+                self.ultima_interacao = agora
+                self.fila.clear()  # reações antigas já não fazem sentido
+                self.bloqueio_ate = 0.0
+                self.definir("ouvindo", 90, "ouvindo", forcar=True, respeitar_bloqueio=False)
+                self.ocupado_ate = agora + 90
+            elif self.atual == "ouvindo":
+                self.ocupado_ate = 0.0
+                self.ate = agora + 1.0
+                if not entendeu:
+                    self.fila.append(("confusa", 4, "ouvindo"))
 
     def dormir(self):
         with self._lock:

@@ -1,9 +1,10 @@
 import time
-from collections import deque
 
 import numpy as np
 import sounddevice as sd
 from faster_whisper import WhisperModel
+
+from audio.vad import Vad
 
 
 class Listener:
@@ -15,59 +16,62 @@ class Listener:
         self.silence_time_limit = 1.0      # antes era 2.0: cada segundo aqui é um segundo a menos de espera
         self.max_segundos = 20             # trava de segurança
         self.pre_roll_blocos = 4           # guarda 0,4 s antes da voz para não cortar a 1ª sílaba
+        self.voz_min = 0.25                # menos que isso acima do limiar é estalo/batida: descarta
+        self.auto_limiar = True            # acompanha o ruído de fundo (nunca fica abaixo de `threshold`)
+        # lidos de fora (ex.: o pet desenha o anel de volume): "parado", "esperando", "gravando", "transcrevendo"
+        self.estado = "parado"
+        self.nivel = 0.0
+        self.limiar_atual = self.threshold
 
     def ouvir_som(self, espera_max=None, cancelar=None):
         """Grava até o silêncio e transcreve. Devolve None se ninguém falou em `espera_max` segundos
         ou se o evento `cancelar` for acionado (usado pela chamada na interface web)."""
-        buffer = []
-        pre = deque(maxlen=self.pre_roll_blocos)
-        est = {"gravando": False, "ultima_voz": None, "inicio": None}
+        vad = Vad(limiar=self.threshold, silencio=self.silence_time_limit, max_seg=self.max_segundos,
+                  pre_roll=self.pre_roll_blocos, dur_bloco=self.blocksize / self.samplerate,
+                  voz_min=self.voz_min, auto=self.auto_limiar)
+        gravando_antes = False
+        self.estado, self.nivel = "esperando", 0.0
 
         print("🎧 Ouvindo...")
         t_ini = time.time()
 
         def callback(indata, frames, time_info, status):
-            volume = np.sqrt(np.mean(indata ** 2))
-            bloco = indata.copy()
+            volume = float(np.sqrt(np.mean(indata ** 2)))
+            vad.alimentar(volume, indata.copy(), time.time())
 
-            if volume > self.threshold:
-                if not est["gravando"]:
-                    print("🗣 Voz detectada, começando gravação...")
-                    est["gravando"] = True
-                    est["inicio"] = time.time()
-                    buffer.extend(pre)  # inclui o trecho logo antes da voz
-                    pre.clear()
-                buffer.append(bloco)
-                est["ultima_voz"] = time.time()
-            elif est["gravando"]:
-                buffer.append(bloco)
-            else:
-                pre.append(bloco)
-
-        with sd.InputStream(
-            samplerate=self.samplerate,
-            channels=1,
-            dtype="float32",
-            blocksize=self.blocksize,
-            callback=callback,
-        ):
-            while True:
-                if cancelar is not None and cancelar.is_set():
-                    return None
-                if not est["gravando"] and espera_max and time.time() - t_ini > espera_max:
-                    return None
-                if est["gravando"]:
-                    agora = time.time()
-                    if agora - est["ultima_voz"] > self.silence_time_limit:
+        try:
+            with sd.InputStream(
+                samplerate=self.samplerate,
+                channels=1,
+                dtype="float32",
+                blocksize=self.blocksize,
+                callback=callback,
+            ):
+                while True:
+                    if cancelar is not None and cancelar.is_set():
+                        return None
+                    if not vad.gravando and espera_max and time.time() - t_ini > espera_max:
+                        return None
+                    self.nivel, self.limiar_atual = vad.nivel, vad.limiar()
+                    self.estado = "gravando" if vad.gravando else "esperando"
+                    if vad.gravando and not gravando_antes:
+                        print("🗣 Voz detectada, começando gravação...")
+                    gravando_antes = vad.gravando
+                    if vad.acabou(time.time()):
                         print("🤫 Silêncio detectado. Parando gravação.")
                         break
-                    if agora - est["inicio"] > self.max_segundos:
-                        break
-                time.sleep(0.05)
+                    time.sleep(0.05)
 
-        if not buffer:
-            return None
+            buffer = vad.buffer
+            if not buffer:
+                return None
 
+            self.estado = "transcrevendo"
+            return self._transcrever(buffer)
+        finally:
+            self.estado, self.nivel = "parado", 0.0
+
+    def _transcrever(self, buffer):
         audio = np.concatenate(buffer).flatten()
         pico = np.max(np.abs(audio))
         if pico > 0:

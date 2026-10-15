@@ -64,16 +64,46 @@ except Exception as e:
 ouvido_ok = all(importlib.util.find_spec(m) for m in ("faster_whisper", "sounddevice"))
 mic = None
 lock_mic = threading.Lock()
+lock_carga_mic = threading.Lock()
+mic_carregando = False
 cancelar_mic = threading.Event()
 
 
 def carregar_mic():
     global mic
-    if mic is None:
-        from audio.listener import Listener
+    with lock_carga_mic:  # duas chamadas ao mesmo tempo não carregam o Whisper duas vezes
+        if mic is None:
+            from audio.listener import Listener
 
-        mic = Listener()
+            mic = Listener()
     return mic
+
+
+def preparar_mic():
+    """Carrega o Whisper em segundo plano, para o primeiro clique no microfone não esperar o modelo."""
+    global mic_carregando
+    if not ouvido_ok or mic is not None or mic_carregando:
+        return
+    mic_carregando = True
+
+    def carga():
+        global mic_carregando
+        try:
+            carregar_mic()
+        except Exception as e:
+            print("Não consegui preparar o microfone:", e)
+        finally:
+            mic_carregando = False
+
+    threading.Thread(target=carga, daemon=True).start()
+
+
+def estado_mic():
+    """O que o pet precisa para desenhar o anel de volume: 'esperando', 'gravando', 'transcrevendo'..."""
+    m = mic
+    return {"ouvido": ouvido_ok, "pronto": m is not None, "carregando": mic_carregando,
+            "ativo": lock_mic.locked(), "estado": m.estado if m else "parado",
+            "nivel": round(m.nivel, 4) if m else 0.0, "limiar": round(m.limiar_atual, 4) if m else 0.01}
 
 
 # ---------------------------------------------------------------- cérebro
@@ -268,14 +298,31 @@ def ouvir():
         return jsonify(error="Microfone do PC indisponível: instale faster-whisper e sounddevice."), 501
     if not lock_mic.acquire(blocking=False):
         return jsonify(error="O microfone já está em uso."), 409
+    espera = max(3.0, min(request.args.get("espera", 20, type=float), 60.0))  # quanto espera a pessoa começar a falar
+    emo.ouvindo(True)  # ela fica atenta (e não troca de expressão) enquanto o microfone está aberto
+    entendeu = False
     try:
         cancelar_mic.clear()
-        texto = carregar_mic().ouvir_som(espera_max=20, cancelar=cancelar_mic)
+        texto = carregar_mic().ouvir_som(espera_max=espera, cancelar=cancelar_mic)
+        entendeu = bool(texto)
         return jsonify(texto=texto)
     except Exception as e:
         return jsonify(error=f"Erro no microfone: {e}"), 500
     finally:
         lock_mic.release()
+        # cancelar de propósito não é "não entendi": só fica confusa se ninguém falou
+        emo.ouvindo(False, entendeu or cancelar_mic.is_set())
+
+
+@app.get("/ouvir/estado")
+def ouvir_estado():
+    return jsonify(estado_mic())
+
+
+@app.post("/ouvir/preparar")
+def ouvir_preparar():
+    preparar_mic()
+    return jsonify(estado_mic())
 
 
 @app.post("/ouvir/cancelar")

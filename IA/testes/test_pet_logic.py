@@ -8,6 +8,7 @@ import sys
 import tempfile
 import textwrap
 import threading
+import time
 import types
 import unittest
 
@@ -96,6 +97,76 @@ class ComServidor(unittest.TestCase):
         falas = [e for e in self.c.eventos(u)[0] if e["tipo"] == "fala"]
         self.assertEqual([f["emocao"] for f in falas], ["feliz", "irritada"])
         self.assertTrue(all("<" not in f["texto"] for f in falas))
+
+
+class VozComServidor(unittest.TestCase):
+    """Cliente de voz contra o server.py de verdade, com o microfone/Whisper trocados por um falso."""
+
+    @classmethod
+    def setUpClass(cls):
+        import server
+        from werkzeug.serving import make_server
+        from testes.test_integracao_pet import MicFalso
+        cls.server, cls.MicFalso = server, MicFalso
+        server.brain.clima.atualizar = lambda: None
+        cls.porta = porta_livre()
+        cls.http = make_server("127.0.0.1", cls.porta, server.app, threaded=True)
+        threading.Thread(target=cls.http.serve_forever, daemon=True).start()
+        cls.c = L.Cliente(f"http://127.0.0.1:{cls.porta}")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.http.shutdown()
+
+    def setUp(self):
+        zerar_motor(self.server)
+        self.mic0, self.ok0 = self.server.mic, self.server.ouvido_ok
+        self.server.ouvido_ok = True
+
+    def tearDown(self):
+        self.server.mic, self.server.ouvido_ok = self.mic0, self.ok0
+
+    def test_ouvir_devolve_o_texto(self):
+        self.server.mic = self.MicFalso("pula esse vídeo")
+        self.assertEqual(self.c.ouvir(espera=5)["texto"], "pula esse vídeo")
+        self.assertEqual(self.server.mic.chamadas, [5.0])
+
+    def test_ninguem_falou_devolve_none(self):
+        self.server.mic = self.MicFalso(None)
+        self.assertIsNone(self.c.ouvir()["texto"])
+
+    def test_microfone_indisponivel_vira_erro_legivel(self):
+        self.server.ouvido_ok, self.server.mic = False, None
+        with self.assertRaises(L.ErroServidor) as cm:
+            self.c.ouvir()
+        self.assertEqual(cm.exception.status, 501)
+        self.assertIn("faster-whisper", str(cm.exception))
+
+    def test_estado_em_tempo_real_e_cancelar(self):
+        self.server.mic = self.MicFalso("x", demora=3)
+        resultado = []
+        t = threading.Thread(target=lambda: resultado.append(self.c.ouvir()))
+        t.start()
+        time.sleep(0.2)
+        est = self.c.ouvir_estado()
+        self.assertEqual(L.estado_do_servidor(est), "gravando")
+        self.assertGreater(L.escala_nivel(est["nivel"], est["limiar"]), 0.5)
+        self.c.ouvir_cancelar()
+        t.join(3)
+        self.assertEqual(resultado[0]["texto"], None)
+        self.assertIsNone(L.estado_do_servidor(self.c.ouvir_estado()))
+
+    def test_preparar_e_parar_fala_e_adiar(self):
+        self.server.mic = self.MicFalso()
+        self.assertTrue(self.c.ouvir_preparar()["pronto"])
+        self.assertTrue(self.c.parar_fala()["ok"])
+        item = self.c.adiar("beber água", 10)["item"]
+        self.assertEqual(item["texto"], "beber água")
+        self.server.brain.agenda.remover(item["id"])
+
+    def test_adiar_texto_vazio_vira_erro_do_servidor(self):
+        with self.assertRaises(L.ErroServidor):
+            self.c.adiar("x", minutos=-5)
 
 
 class GarantirServidor(unittest.TestCase):
@@ -348,6 +419,112 @@ class Passeio(unittest.TestCase):
         self.assertGreater(saltos("feliz"), saltos("neutra"))
 
 
+class VozPura(unittest.TestCase):
+    def test_o_clique_no_microfone_em_cada_estado(self):
+        esperado = {"parado": "iniciar", "preparando": "cancelar", "ouvindo": "cancelar", "gravando": "cancelar",
+                    "transcrevendo": "cancelar", "pensando": "interromper", "falando": "interromper"}
+        self.assertEqual(set(esperado), set(L.ESTADOS_VOZ))
+        for est, acao in esperado.items():
+            self.assertEqual(L.acao_clique_mic(est), acao, est)
+
+    def test_traduz_o_estado_do_servidor(self):
+        f = L.estado_do_servidor
+        self.assertIsNone(f({"ativo": False, "estado": "parado"}))
+        self.assertEqual(f({"ativo": True, "pronto": False}), "preparando")
+        self.assertEqual(f({"ativo": True, "pronto": True, "carregando": True}), "preparando")
+        self.assertEqual(f({"ativo": True, "pronto": True, "estado": "esperando"}), "ouvindo")
+        self.assertEqual(f({"ativo": True, "pronto": True, "estado": "parado"}), "ouvindo")
+        self.assertEqual(f({"ativo": True, "pronto": True, "estado": "gravando"}), "gravando")
+        self.assertEqual(f({"ativo": True, "pronto": True, "estado": "transcrevendo"}), "transcrevendo")
+
+    def test_modo_chamada_continua_ate_ficar_muda(self):
+        c = L.Chamada()
+        self.assertFalse(c.continuar(), "desligada não continua")
+        c.ligar()
+        c.ouviu("oi")
+        self.assertTrue(c.continuar())
+        c.ouviu(None)
+        self.assertTrue(c.continuar(), "um silêncio só: tenta de novo")
+        c.ouviu("")
+        self.assertFalse(c.continuar())
+        self.assertTrue(c.encerrou_por_silencio())
+        c.ligar()
+        c.ouviu(None)
+        c.ouviu("falei")
+        c.ouviu(None)
+        self.assertTrue(c.continuar(), "falar zera a contagem")
+        c.desligar()
+        self.assertFalse(c.continuar())
+        self.assertFalse(c.encerrou_por_silencio())
+
+    def test_escala_do_nivel(self):
+        self.assertEqual(L.escala_nivel(0), 0.0)
+        self.assertLess(L.escala_nivel(0.003), 0.4, "ruído de fundo mexe pouco")
+        self.assertGreater(L.escala_nivel(0.06), 0.8, "voz normal enche o anel")
+        self.assertEqual(L.escala_nivel(5.0), 1.0)
+        valores = [L.escala_nivel(v / 1000) for v in range(0, 300, 5)]
+        self.assertEqual(valores, sorted(valores), "cresce sempre com o volume")
+        self.assertEqual(L.escala_nivel(0.1, limiar=0), 1.0, "limiar zero não divide por zero")
+
+    def test_suavizar_sobe_rapido_e_desce_devagar(self):
+        sobe = L.suavizar(0.0, 1.0)
+        desce = 1.0 - L.suavizar(1.0, 0.0)
+        self.assertGreater(sobe, desce * 3)
+        x = 0.0
+        for _ in range(60):
+            x = L.suavizar(x, 0.7)
+        self.assertAlmostEqual(x, 0.7, places=3)
+
+
+class Geometria(unittest.TestCase):
+    def test_botoes_ficam_dentro_da_janela_e_sem_se_tocar(self):
+        for escala in (0.5, 0.7, 1.0, 1.4):
+            lay = L.layout(escala)
+            b = L.botoes(lay)
+            for nome, (cx, cy, r) in b.items():
+                self.assertTrue(r <= cx <= lay.janela_w - r and r <= cy <= lay.janela_h - r, (escala, nome))
+                self.assertGreater(cy, lay.janela_h - lay.sprite_h * 0.4, "perto dos pés, longe do balão")
+            (x1, y1, r1), (x2, y2, r2) = b["mic"], b["texto"]
+            self.assertGreater(math.hypot(x2 - x1, y2 - y1), r1 + r2 + 2, "não se sobrepõem")
+
+    def test_acerto_do_clique(self):
+        lay = L.layout(0.7)
+        cx, cy, r = L.botoes(lay)["mic"]
+        self.assertEqual(L.botao_em(lay, cx, cy), "mic")
+        self.assertEqual(L.botao_em(lay, cx + r - 1, cy), "mic")
+        self.assertIsNone(L.botao_em(lay, cx + r * 1.2 + 5, cy - r * 3))
+        tx, ty, _ = L.botoes(lay)["texto"]
+        self.assertEqual(L.botao_em(lay, tx, ty), "texto")
+        self.assertIsNone(L.botao_em(lay, lay.janela_w / 2, 5), "balão/cabeça não é botão")
+
+    def test_botoes_do_lembrete_cabem_no_balao(self):
+        rs = L.rects_aviso(100, 20, 240, 80)
+        for nome, (x, y, w, h) in rs.items():
+            self.assertTrue(100 <= x and x + w <= 340 and 20 <= y and y + h <= 100, nome)
+        ok, mais = rs["ok"], rs["mais"]
+        self.assertLess(ok[0] + ok[2], mais[0])
+        self.assertTrue(L.dentro_rect(mais, mais[0] + 5, mais[1] + 5))
+        self.assertFalse(L.dentro_rect(mais, mais[0] - 5, mais[1] + 5))
+
+    def test_limpar_lembrete(self):
+        self.assertEqual(L.limpar_lembrete("⏰ Lembrete: beber água"), "beber água")
+        self.assertEqual(L.limpar_lembrete("Lembrete atrasado: remédio"), "remédio")
+        self.assertEqual(L.limpar_lembrete("texto qualquer"), "texto qualquer")
+        self.assertTrue(L.eh_lembrete("⏰ Lembrete: x"))
+        self.assertTrue(L.eh_lembrete("Lembrete atrasado: x"))
+        self.assertFalse(L.eh_lembrete("Perdi a conexão"))
+        self.assertFalse(L.eh_lembrete("✓ Aberto o YouTube"))
+
+
+class Olhar(unittest.TestCase):
+    def test_vira_para_o_lado_do_mouse_com_folga(self):
+        f = L.virar_para
+        self.assertTrue(f(1000, 500, False))
+        self.assertFalse(f(100, 500, True))
+        self.assertTrue(f(560, 500, True), "dentro da folga: mantém")
+        self.assertFalse(f(560, 500, False), "dentro da folga: mantém")
+
+
 class Config(unittest.TestCase):
     def test_ida_e_volta_e_limites(self):
         d = os.path.join(tempfile.mkdtemp(), "pet.json")
@@ -359,6 +536,11 @@ class Config(unittest.TestCase):
         self.assertEqual((volta["x"], volta["y"], volta["passear"]), (10, 20, False))
         self.assertEqual(volta["escala"], 2.0)
         self.assertNotIn("lixo", volta)
+
+    def test_novas_opcoes_tem_padrao_sensato(self):
+        cfg = L.carregar_config(os.path.join(tempfile.mkdtemp(), "novo.json"))
+        self.assertEqual((cfg["voz"], cfg["chamada"], cfg["olhar"], cfg["espera"], cfg["preparar_ouvido"]),
+                         (True, False, True, 10, True))
 
     def test_arquivo_estragado_cai_no_padrao(self):
         d = os.path.join(tempfile.mkdtemp(), "pet.json")

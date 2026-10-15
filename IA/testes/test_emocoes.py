@@ -278,6 +278,57 @@ class Ociosidade(unittest.TestCase):
         self.assertGreater(c["irritada"], base["irritada"] * 2)
 
 
+class Ouvindo(unittest.TestCase):
+    def test_microfone_aberto_deixa_atenta_e_nao_troca_sozinha(self):
+        e, r = novo(1)
+        e.ouvindo(True)
+        self.assertEqual(e.atual, "ouvindo")
+        self.assertEqual(simular(e, r, 60), [], "enquanto ouve, nada de trocar de cara")
+        self.assertEqual(e.atual, "ouvindo")
+
+    def test_acorda_na_hora_sem_espreguicar(self):
+        e, r = novo(2)
+        simular(e, r, 15 * 60)
+        self.assertEqual(e.atual, "dormindo")
+        e.ouvindo(True)
+        self.assertEqual(e.atual, "ouvindo")
+        self.assertEqual(e.fila, [])
+
+    def test_fechou_e_entendeu_deixa_a_reacao_para_on_usuario(self):
+        e, r = novo(1)
+        e.ouvindo(True)
+        e.ouvindo(False, entendeu=True)
+        self.assertEqual(e.ocupado_ate, 0.0)
+        e.on_usuario("oi alice")
+        self.assertIn(e.atual, ("feliz", "brincalhona", "timida"))
+
+    def test_fechou_sem_entender_fica_confusa(self):
+        e, r = novo(1)
+        e.ouvindo(True)
+        e.ouvindo(False, entendeu=False)
+        simular(e, r, 1)
+        self.assertEqual(e.atual, "confusa")
+
+    def test_fechar_sem_ter_aberto_nao_faz_nada(self):
+        e, r = novo(1)
+        _, u = e.eventos(0)
+        e.definir("feliz")
+        e.ouvindo(False, entendeu=False)
+        self.assertEqual(e.atual, "feliz")
+
+    def test_nunca_aparece_no_sorteio_nem_em_frases(self):
+        e, r = novo(3)
+        nomes = {x["nome"] for x in simular(e, r, 600)}
+        self.assertNotIn("ouvindo", nomes)
+        self.assertNotEqual(e.escolher_frase("oi", tag="ouvindo"), "ouvindo")
+        self.assertEqual(E.normalizar_nome("escutando"), "ouvindo")
+
+    def test_humor_para_o_prompt(self):
+        e, _ = novo()
+        e.ouvindo(True)
+        self.assertIn("Ouvindo", e.humor_para_prompt())
+
+
 class Eventos(unittest.TestCase):
     def test_cutucao_escala_para_irritacao(self):
         def ultimo(n, seed):

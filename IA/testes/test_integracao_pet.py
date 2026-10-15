@@ -3,6 +3,8 @@ import json
 import os
 import sys
 import tempfile
+import threading
+import time
 import types
 import unittest
 
@@ -147,6 +149,129 @@ class Chat(Base):
     def test_estado_traz_a_expressao(self):
         j = self.c.get("/state", environ_base=LOCAL).get_json()
         self.assertIn(j["expressao"]["nome"], server.catalogo_emocoes())
+
+
+class MicFalso:
+    """Listener de mentira: ouvir_som devolve o texto combinado (ou None) depois de um instante."""
+    estado, nivel, limiar_atual = "parado", 0.0, 0.01
+
+    def __init__(self, texto="abre o youtube", demora=0.0):
+        self.texto, self.demora, self.chamadas = texto, demora, []
+
+    def ouvir_som(self, espera_max=None, cancelar=None):
+        self.chamadas.append(espera_max)
+        self.estado, self.nivel = "gravando", 0.12
+        fim = time.time() + self.demora
+        while time.time() < fim:
+            if cancelar is not None and cancelar.is_set():
+                self.estado, self.nivel = "parado", 0.0
+                return None
+            time.sleep(0.01)
+        self.estado, self.nivel = "parado", 0.0
+        return self.texto
+
+
+class Microfone(Base):
+    def setUp(self):
+        super().setUp()
+        self.mic0, self.ok0 = server.mic, server.ouvido_ok
+        server.ouvido_ok = True
+
+    def tearDown(self):
+        server.mic, server.ouvido_ok = self.mic0, self.ok0
+        super().tearDown()
+
+    def test_estado_sem_microfone_instalado(self):
+        server.ouvido_ok, server.mic = False, None
+        j = self.c.get("/ouvir/estado", environ_base=LOCAL).get_json()
+        self.assertEqual((j["ouvido"], j["pronto"], j["ativo"], j["estado"]), (False, False, False, "parado"))
+        self.assertEqual(self.c.post("/ouvir", environ_base=LOCAL).status_code, 501)
+
+    def test_ouvir_devolve_o_texto_e_passa_a_espera(self):
+        server.mic = MicFalso("tudo bem")
+        r = self.c.post("/ouvir?espera=7", environ_base=LOCAL)
+        self.assertEqual(r.get_json()["texto"], "tudo bem")
+        self.assertEqual(server.mic.chamadas, [7.0])
+        self.c.post("/ouvir?espera=1000", environ_base=LOCAL)
+        self.assertEqual(server.mic.chamadas[-1], 60.0, "limita a espera")
+        self.c.post("/ouvir", environ_base=LOCAL)
+        self.assertEqual(server.mic.chamadas[-1], 20.0, "padrão de sempre (a interface web não manda nada)")
+
+    def test_fica_atenta_enquanto_ouve_e_solta_depois(self):
+        server.mic = MicFalso("oi", demora=0.4)
+        antes = self.ultimo_id()
+        done = []
+        t = threading.Thread(target=lambda: done.append(self.c.post("/ouvir", environ_base=LOCAL)))
+        t.start()
+        time.sleep(0.15)
+        self.assertEqual(server.emo.atual, "ouvindo")
+        est = self.c.get("/ouvir/estado", environ_base=LOCAL).get_json()
+        self.assertEqual((est["ativo"], est["estado"], est["nivel"]), (True, "gravando", 0.12))
+        t.join()
+        nomes = [e["nome"] for e in self.eventos(antes) if e["tipo"] == "emocao"]
+        self.assertEqual(nomes[0], "ouvindo")
+        self.assertEqual(server.emo.ocupado_ate, 0.0, "liberou a vida própria")
+        self.assertFalse(self.c.get("/ouvir/estado", environ_base=LOCAL).get_json()["ativo"])
+
+    def test_ninguem_falou_fica_confusa(self):
+        server.mic = MicFalso(None)
+        self.c.post("/ouvir", environ_base=LOCAL)
+        time.sleep(0.02)
+        server.emo.tick()
+        self.assertEqual(server.emo.atual, "confusa")
+
+    def test_cancelar_nao_deixa_confusa(self):
+        server.mic = MicFalso("x", demora=2)
+        t = threading.Thread(target=lambda: self.c.post("/ouvir", environ_base=LOCAL))
+        t.start()
+        time.sleep(0.15)
+        self.c.post("/ouvir/cancelar", environ_base=LOCAL)
+        t.join(2)
+        server.emo.tick()
+        self.assertNotEqual(server.emo.atual, "confusa")
+        self.assertEqual(server.emo.fila, [])
+
+    def test_ocupado_devolve_409(self):
+        server.mic = MicFalso("x", demora=0.5)
+        t = threading.Thread(target=lambda: self.c.post("/ouvir", environ_base=LOCAL))
+        t.start()
+        time.sleep(0.15)
+        self.assertEqual(self.c.post("/ouvir", environ_base=LOCAL).status_code, 409)
+        t.join()
+
+    def test_preparar_carrega_uma_vez_em_segundo_plano(self):
+        server.mic = None
+        cargas = []
+        original = server.carregar_mic
+        def lento():
+            cargas.append(1)
+            time.sleep(0.2)
+            server.mic = MicFalso()
+            return server.mic
+        server.carregar_mic = lento
+        try:
+            j = self.c.post("/ouvir/preparar", environ_base=LOCAL).get_json()
+            self.assertTrue(j["carregando"])
+            self.c.post("/ouvir/preparar", environ_base=LOCAL)  # repetir não carrega de novo
+            self.assertTrue(esperar_ate(lambda: self.c.get("/ouvir/estado", environ_base=LOCAL).get_json()["pronto"]))
+            self.assertEqual(len(cargas), 1)
+            self.assertFalse(server.mic_carregando)
+        finally:
+            server.carregar_mic = original
+
+    def test_remoto_sem_senha_nao_acessa_o_microfone(self):
+        for rota, metodo in (("/ouvir/estado", "get"), ("/ouvir/preparar", "post"), ("/ouvir", "post")):
+            r = getattr(self.c, metodo)(rota, environ_base={"REMOTE_ADDR": "100.64.1.2"})
+            self.assertIn(r.status_code, (401, 403), rota)
+
+
+def esperar_ate(cond, s=2.0):
+    fim = time.time() + s
+    while time.time() < fim:
+        if cond():
+            return True
+        time.sleep(0.02)
+    return False
 
 
 class Rotas(Base):
