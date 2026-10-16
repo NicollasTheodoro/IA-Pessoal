@@ -111,6 +111,37 @@ e pelas partículas.
 
 Para ver todas: menu do pet > Expressões, ou na interface web o painel "Expressões".
 
+## Ela puxa assunto (iniciativa)
+A Alice não espera mais você falar primeiro. Tudo vem pronto no jeito dela (instantâneo, sem gastar o
+Ollama), e cada fala já muda a expressão junto.
+
+| Quando | O que ela faz |
+|---|---|
+| **Você liga o pet** | Diz oi pela hora ("Bom dia! Dormiu bem?"), lembra da agenda de hoje ou da chuva, convida a conversar e **já aquece o modelo** (a 1ª conversa sai rápida). Se você some por dias: "Faz 5 dias que você não me liga". Se só reiniciou: "Voltei! Tava só dando um reset." |
+| **Você fica muito tempo sem falar com ela** | ~7 min: "Ei... sumiu. Tá fazendo alguma coisa importante?". ~25 min: "Eu tô aqui se precisar de mim". ~1 h: "Bebe uma água e levanta dessa cadeira". Depois disso ela para até você falar com ela de novo. |
+| **Ela muda de cara sozinha** | Espreguiçando: "Nossa, que cansaço." Sonolenta: "Tô com sono...". Entediada: "Que tédio...". Carente, ideia, confusa, tímida etc. também têm as suas (nem toda troca vira fala, e há um intervalo mínimo). |
+| **Você sai do PC e volta** (15+ min) | "Voltou! Já tava com saudade." Depois de 2 h+ ela faz drama. |
+| **Extras** | "Já almoçou?" / "Já jantou?" (uma vez por dia, e pede para você contar o que comeu, que ela anota); "Já passou da meia-noite, vai dormir" (uma vez por noite); reclama quando você a cutuca demais ("Chega! Para de me cutucar!") ou a acorda ("Eu tava dormindo!"). |
+
+O que ela diz de iniciativa entra no histórico: se você responder "tô codando", ela sabe do que se trata.
+
+**Para não ser chata**
+- Só pergunta "tá fazendo algo importante?" se você está **mexendo no PC** (teclado/mouse, só no Windows; ela não vê o que você digita, só *quando* foi o último movimento). Se você saiu, ela fica quieta.
+- Nunca interrompe conversa, microfone aberto ou ela mesma falando. No ritmo **Parada** (modo foco), fica muda.
+- As perguntas de silêncio ficam mais espaçadas e param na 3ª.
+- **Menu > 💬 Iniciativa da Alice**: Desligada, Calma (fala menos), Normal, Faladeira. Também dá para desligar só o "oi ao ligar". Sem o servidor pelo pet: `$env:ALICE_INICIATIVA="1"` (0 a 3).
+- Ela segue o **🔊 voz alta**: com a voz desligada, as iniciativas aparecem só no balão. Cada fala falada gasta um pouco do seu Murf; a "Calma" gasta menos.
+
+**Testar sem esperar 7 minutos:** menu > 💬 Iniciativa > ▶ Testar (oi, "tá fazendo algo importante?", espreguiçando, voltou).
+
+**Onde ajustar** (`IA/brain/iniciativa.py`): as frases (`SAUDACAO`, `CHECKIN`, `EXPRESSAO`, `REFEICAO`...), os tempos (`T_CHECKIN`, `GAP_GERAL`, `GAP_EXPRESSAO`, `VOLTA_MIN`) e a chance de comentar cada expressão (`PROB_EXPRESSAO`).
+
+**Limites**
+- As falas são prontas, então se repetem com o tempo (há 2-4 variações de cada). Dá para colocar mais no arquivo.
+- Ela não sabe se você está em uma chamada de vídeo ou jogo: use "Calma", "Desligada" ou 🔇. Quem assiste filme sem mexer no PC conta como "ausente".
+- A interface web mostra a expressão e toca a voz, mas não mostra o balão de texto (isso é do pet).
+- Ainda não testei com PySide6 nem com o Windows de verdade (sem a presença real, a lógica rodou com relógio e presença simulados).
+
 ## Por que a troca parece natural
 - **Reage a você antes de responder**: "oi" anima, elogio deixa tímida ou apaixonada, xingamento
   irrita, comando vira "ideia", "boa noite" dá sono.
@@ -135,6 +166,10 @@ Para ver todas: menu do pet > Expressões, ou na interface web o painel "Express
 - Tamanho, passear, posição: salvos em `~/.alice_pet.json`.
 
 ## Se algo der errado
+- **"HTTP Error 404" ao testar a iniciativa, ou ela não fala nada**: o pet conectou num servidor antigo que ainda
+  estava rodando em segundo plano. Feche o `python.exe` no Gerenciador de Tarefas (ou rode
+  `taskkill /F /IM python.exe`) e abra o pet de novo. Para conferir, abra `http://127.0.0.1:5000/pet/iniciativa`
+  no navegador: tem que mostrar um JSON com `nivel`, não um 404.
 - **`'charmap' codec can't encode character '\U0001f3a7'`** (erro do microfone): corrigido. Acontecia
   quando o servidor era ligado sem console e o Python do Windows tentava imprimir um emoji em
   cp1252. Agora a saída é sempre UTF-8 (`IA/brain/saida.py`), no servidor, no pet e no microfone,
@@ -159,4 +194,4 @@ Para ver todas: menu do pet > Expressões, ou na interface web o painel "Express
 
 ## Testes
 Dentro da pasta `IA`:
-`python -m unittest testes.test_emocoes testes.test_integracao_pet testes.test_pet_logic testes.test_pet_janela testes.test_voz testes.test_hotkey testes.test_saida`
+`python -m unittest testes.test_emocoes testes.test_integracao_pet testes.test_pet_logic testes.test_pet_janela testes.test_voz testes.test_hotkey testes.test_saida testes.test_iniciativa`

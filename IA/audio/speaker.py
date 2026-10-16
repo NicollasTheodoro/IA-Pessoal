@@ -50,6 +50,10 @@ class Speak:
         """Bloqueia até tudo que foi enfileirado terminar de tocar."""
         self._fila.join()
 
+    def ocupado(self):
+        """True se ainda há frase sintetizando ou tocando (a Alice não puxa assunto por cima)."""
+        return self._fila.unfinished_tasks > 0
+
     def falar(self, texto):
         """Compatível com o código antigo: enfileira e espera acabar."""
         self.enfileirar(texto)

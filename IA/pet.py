@@ -12,7 +12,8 @@ O que dá para fazer:
     menu > Botões       esconde o 🎤 e/ou o ⌨, ou só mostra quando o mouse chega perto
     clique              cutuca (1x simpática, várias seguidas ela se irrita)
     arrastar            muda de lugar; ao soltar no ar ela cai e quica
-    botão direito       menu: conversar, expressões, ritmo, tamanho, passear, dormir...
+    botão direito       menu: conversar, expressões, ritmo, iniciativa, tamanho, passear, dormir...
+    iniciativa          ela diz oi ao ligar, pergunta se você está ocupado quando some, comenta as expressões
     ícone na bandeja    mostrar/esconder, conversar, sair
 
 Toda a lógica (conversa com o servidor, fila de expressões, movimentos, física) está em pet_logic.py;
@@ -211,6 +212,7 @@ class JanelaPet(QtWidgets.QWidget):
         self._rotulo_tecla = ""
         self._ultimo, self._offline_avisado = agora, False
         self._cache = {}
+        self._abertura_feita = False   # o "oi" ao ligar acontece uma vez por execução do pet
 
         self._aplicar_layout()
 
@@ -308,11 +310,30 @@ class JanelaPet(QtWidgets.QWidget):
     def on_online(self, ok):
         if ok:
             self._offline_avisado = False
+            threading.Thread(target=self._ao_conectar, daemon=True).start()
             if self.mic_disponivel is None:
                 threading.Thread(target=self._descobrir_ouvido, daemon=True).start()
         elif not self._offline_avisado:
             self._offline_avisado = True
             self.balao.mostrar("Perdi a conexão com a Alice (servidor). Vou tentando de novo…", 8, time.time(), "aviso")
+
+    def _ao_conectar(self):
+        """Conectou (ou o servidor reiniciou): passa o nível de iniciativa e, na 1ª vez, ela diz oi."""
+        try:
+            self.cliente.iniciativa(nivel=self.cfg["iniciativa"], voz=bool(self.cfg["voz"]))
+            if not self._abertura_feita:
+                self._abertura_feita = True
+                if self.cfg["abertura"] and self.cfg["iniciativa"] > 0:
+                    self.cliente.abertura()  # o servidor fala e já aquece o modelo
+        except L.ErroServidor as e:
+            if e.status == 404:
+                self._abertura_feita = False
+                self.ponte.texto.emit(self.AVISO_SERVIDOR_ANTIGO, "aviso")
+        except Exception:
+            pass
+
+    AVISO_SERVIDOR_ANTIGO = ("O servidor da Alice é de uma versão antiga (sem iniciativa). Feche o Python/server.py "
+                             "que está rodando (Gerenciador de Tarefas > python.exe) e abra o pet de novo.")
 
     def _descobrir_ouvido(self):
         """Pergunta se o servidor tem microfone e já carrega o Whisper (o 1º clique no 🎤 não espera)."""
@@ -359,6 +380,9 @@ class JanelaPet(QtWidgets.QWidget):
         def rodar():
             try:
                 fn(*args)
+            except L.ErroServidor as e:
+                msg = self.AVISO_SERVIDOR_ANTIGO if e.status == 404 else f"Não consegui falar com o servidor: {e}"
+                self.ponte.texto.emit(msg, "aviso")
             except Exception as e:
                 self.ponte.texto.emit(f"Não consegui falar com o servidor: {e}", "aviso")
         threading.Thread(target=rodar, daemon=True).start()
@@ -886,6 +910,12 @@ class JanelaPet(QtWidgets.QWidget):
         if chave == "chamada" and not valor:
             self.chamada.desligar()
         L.salvar_config(self.cfg)
+        if chave == "voz":  # as falas de iniciativa também seguem a voz alta
+            self._async(self.cliente.iniciativa, None, bool(valor))
+
+    def _definir_iniciativa(self, nivel):
+        self._set("iniciativa", nivel)
+        self._async(self.cliente.iniciativa, nivel, None)
 
     def _set_gen_chat(self):
         self._gen_chat += 1  # solta a resposta que estava chegando
@@ -906,6 +936,20 @@ class JanelaPet(QtWidgets.QWidget):
         ritmo = m.addMenu("⏱ Ritmo das expressões")
         for rotulo, v in (("Parada (só reage)", 0), ("Calma", 2), ("Normal", 1), ("Animada", 0.6)):
             ritmo.addAction(rotulo, lambda checked=False, v=v: self._async(self.cliente.ritmo, v))
+
+        ini = m.addMenu("💬 Iniciativa da Alice (ela puxa assunto)")
+        for rotulo, v in (("Desligada", 0), ("Calma", 1), ("Normal", 2), ("Faladeira", 3)):
+            marca = "● " if self.cfg["iniciativa"] == v else "○ "
+            ini.addAction(marca + rotulo, lambda checked=False, v=v: self._definir_iniciativa(v))
+        a = ini.addAction("👋 Dizer oi ao ligar")
+        a.setCheckable(True)
+        a.setChecked(bool(self.cfg["abertura"]))
+        a.toggled.connect(lambda v: self._set("abertura", bool(v)))
+        ini.addSeparator()
+        for rotulo, tipo, extra in (("▶ Testar: oi", "abertura", {}), ("▶ Testar: 'tá fazendo algo importante?'", "checkin", {}),
+                                    ("▶ Testar: espreguiçando", "expressao", {"emocao": "espreguicando"}),
+                                    ("▶ Testar: voltou", "volta", {})):
+            ini.addAction(rotulo, lambda checked=False, t=tipo, x=extra: self._async(self.cliente.disparar, t, **x))
 
         m.addAction("💤 Dormir", lambda checked=False: self._async(self.cliente.dormir))
         m.addAction("☀️ Acordar", lambda checked=False: self._async(self.cliente.acordar))

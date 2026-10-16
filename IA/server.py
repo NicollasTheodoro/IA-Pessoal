@@ -40,6 +40,7 @@ from flask import Flask, Response, jsonify, request, send_from_directory, stream
 
 from brain.actions import Think
 from brain.emocoes import MOVIMENTOS, Emocoes, catalogo as catalogo_emocoes
+from brain.iniciativa import Iniciativa
 from brain.personality import Personality
 
 PASTA = os.path.dirname(os.path.abspath(__file__))
@@ -146,6 +147,49 @@ emo.iniciar()
 lock_chat = threading.Lock()
 # Edições rápidas de traços/memória não precisam esperar a Alice terminar de falar.
 lock_dados = threading.Lock()
+
+# ---------------------------------------------------------------- iniciativa (ela puxa assunto)
+# Veja brain/iniciativa.py. Nível: ALICE_INICIATIVA=0 desligada, 1 calma, 2 normal (padrão), 3 faladeira.
+def _dizer_iniciativa(texto, emocao, voz=True):
+    ao_falar = lambda: emo.emitir_fala(texto, emocao)  # noqa: E731
+    if voz and speaker is not None:
+        speaker.enfileirar(texto, ao_falar)  # a expressão muda quando a voz começa
+    else:
+        ao_falar()
+
+
+def _ocupado():
+    """Conversa, microfone ou voz em andamento: a Alice espera para puxar assunto."""
+    voz_ocupada = speaker is not None and getattr(speaker, "ocupado", lambda: False)()
+    return lock_chat.locked() or lock_mic.locked() or bool(voz_ocupada)
+
+
+def _guardar_no_historico(texto):
+    """O que ela disse por iniciativa entra no histórico, para a sua resposta fazer sentido."""
+    if lock_chat.acquire(blocking=False):
+        try:
+            brain.messages.append({"role": "assistant", "content": texto})
+            brain.messages[:] = brain.messages[-8:]
+        finally:
+            lock_chat.release()
+
+
+def _aquecer_modelo():
+    def go():
+        with lock_chat:
+            brain.aquecer()
+
+    threading.Thread(target=go, daemon=True).start()
+
+
+try:
+    _nivel_ini = int(os.getenv("ALICE_INICIATIVA", "2"))
+except ValueError:
+    _nivel_ini = 2
+ini = Iniciativa(emo, _dizer_iniciativa, agenda=brain.agenda, clima=brain.clima, ocupado=_ocupado,
+                 historico=_guardar_no_historico, ao_abrir=_aquecer_modelo,
+                 arquivo=os.path.join(os.getenv("ALICE_DADOS", "."), "dados", "iniciativa.json"),
+                 nivel=_nivel_ini if _nivel_ini in (0, 1, 2, 3) else 2)
 
 
 def estado():
@@ -401,6 +445,7 @@ def pet_eventos():
 @app.post("/pet/toque")
 def pet_toque():
     emo.on_toque()
+    ini.on_toque()  # a reação falada sai logo depois (thread da iniciativa)
     return jsonify(atual=emo.estado())
 
 
@@ -435,6 +480,42 @@ def pet_dormir():
 def pet_acordar():
     emo.acordar()
     return jsonify(atual=emo.estado())
+
+
+# ---------------------------------------------------------------- iniciativa: configuração e teste
+@app.get("/pet/iniciativa")
+def pet_iniciativa_get():
+    return jsonify(ini.estado())
+
+
+@app.post("/pet/iniciativa")
+def pet_iniciativa_set():
+    b = corpo()
+    try:
+        ini.configurar(nivel=b.get("nivel"), voz=b.get("voz"))
+    except (TypeError, ValueError) as e:
+        return jsonify(error=str(e)), 400
+    return jsonify(ini.estado())
+
+
+@app.post("/pet/iniciativa/abertura")
+def pet_iniciativa_abertura():
+    """O pet chama ao conectar: ela diz oi (uma vez a cada 5 min no máximo) e aquece o modelo."""
+    partes = ini.abrir()
+    return jsonify(falou=bool(partes), texto=[t for t, _ in partes or []])
+
+
+@app.post("/pet/iniciativa/disparar")
+def pet_iniciativa_disparar():
+    """Para testar sem esperar: {"tipo": "abertura|checkin|volta|almoco|jantar|madrugada|expressao", "emocao": "...", "n": 0}"""
+    b = corpo()
+    try:
+        partes = ini.disparar(str(b.get("tipo", "")), emocao=b.get("emocao"), n=b.get("n", 0))
+    except (TypeError, ValueError) as e:
+        return jsonify(error=str(e)), 400
+    if partes is None:
+        return jsonify(error="Tipo desconhecido."), 400
+    return jsonify(texto=[t for t, _ in partes])
 
 
 # ---------------------------------------------------------------- painel, agenda, planilhas
@@ -555,6 +636,7 @@ if __name__ == "__main__":
                 print("Microfone do PC indisponível:", e)
 
     threading.Thread(target=aquecer, daemon=True).start()  # 1ª resposta bem mais rápida
+    ini.iniciar()  # a vida própria (puxar assunto) só liga quando roda como programa, não nos testes
     print(f"Alice no ar: http://127.0.0.1:{PORTA}" + ("  (aberta para a rede, com senha)" if TOKEN and HOST not in LOCAIS else ""))
     # Por padrão 127.0.0.1: só o seu PC acessa. A interface pode disparar ações no computador.
     app.run(host=HOST, port=PORTA, debug=False, threaded=True)

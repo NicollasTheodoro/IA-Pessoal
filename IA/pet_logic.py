@@ -94,6 +94,17 @@ class Cliente:
     def parar_fala(self):
         return self._req("POST", "/stop")
 
+    # --- iniciativa (ela puxa assunto): o servidor decide quando; o pet só configura e testa
+    def iniciativa(self, nivel=None, voz=None):
+        corpo = {k: v for k, v in (("nivel", nivel), ("voz", voz)) if v is not None}
+        return self._req("POST", "/pet/iniciativa", corpo)
+
+    def abertura(self):
+        return self._req("POST", "/pet/iniciativa/abertura")
+
+    def disparar(self, tipo, **extra):
+        return self._req("POST", "/pet/iniciativa/disparar", {"tipo": tipo, **extra})
+
     def adiar(self, texto, minutos=10):
         return self._req("POST", "/agenda", {"quando": f"daqui a {int(minutos)} minutos", "texto": texto})
 
@@ -147,7 +158,9 @@ PADRAO = {"escala": 0.7, "x": None, "y": None, "topo": True, "passear": True, "a
           "tecla": "",        # atalho global para falar (ex.: 'f9', 'ctrl+alt+space'); vazio = nenhum
           "btn_mic": True,    # mostra o botão 🎤 ao lado dela
           "btn_texto": True,  # mostra o botão ⌨ ao lado dela
-          "btn_hover": False}  # só mostra os botões quando o mouse está perto
+          "btn_hover": False,  # só mostra os botões quando o mouse está perto
+          "iniciativa": 2,    # ela puxa assunto: 0 desligada, 1 calma, 2 normal, 3 faladeira
+          "abertura": True}   # diz "oi" ao ligar o pet
 
 
 def caminho_config():
@@ -163,6 +176,10 @@ def carregar_config(caminho=None):
     except (OSError, ValueError):
         pass
     cfg["escala"] = min(2.0, max(0.3, float(cfg["escala"] or 0.7)))
+    try:
+        cfg["iniciativa"] = min(3, max(0, int(cfg["iniciativa"])))
+    except (TypeError, ValueError):
+        cfg["iniciativa"] = PADRAO["iniciativa"]
     return cfg
 
 
