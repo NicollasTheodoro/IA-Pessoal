@@ -267,7 +267,8 @@ def index():
 
 @app.get("/state")
 def get_state():
-    return jsonify({**estado(), "voz": speaker is not None, "ouvido": ouvido_ok, "modelo": brain.model})
+    return jsonify({**estado(), "voz": speaker is not None, "ouvido": ouvido_ok, "modelo": brain.model,
+                    "visao": brain.visao.modo})
 
 
 @app.get("/actions")
@@ -377,6 +378,30 @@ def ouvir_preparar():
 def ouvir_cancelar():
     cancelar_mic.set()
     return jsonify(ok=True)
+
+
+# ---------------------------------------------------------------- visão de tela (brain/visao.py)
+@app.get("/tela/estado")
+def tela_estado():
+    return jsonify(brain.visao.estado())
+
+
+@app.post("/tela/modo")
+def tela_modo():
+    """{"modo": "0|texto|modelo", "modelo": "qwen3-vl:2b"} troca sem reiniciar o servidor."""
+    b = corpo()
+    try:
+        brain.visao.configurar(modo=b.get("modo"), modelo=b.get("modelo"))
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    return jsonify(brain.visao.estado())
+
+
+@app.post("/tela/ver")
+def tela_ver():
+    """Mostra o que a Alice leria da tela agora (para testar). {"pergunta": "..."} é opcional."""
+    r = brain.visao.ver(str(corpo().get("pergunta", "")))
+    return jsonify(r)
 
 
 @app.post("/stop")

@@ -1,0 +1,7 @@
+# Visão de tela da Alice (opcional). Instale só o que for usar:  pip install -r requirements-visao.txt
+pillow
+mss                                  # captura rápida (se faltar, usa o Pillow)
+winocr; sys_platform == "win32"      # OCR que já vem no Windows 10/11: o mais leve para PC fraco
+# Alternativas, se o winocr não funcionar (instale UMA):
+# rapidocr-onnxruntime               # OCR em CPU, ~100 MB
+# pytesseract                        # precisa do programa Tesseract instalado

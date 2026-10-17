@@ -10,6 +10,7 @@ from brain.dados import Dados
 from brain.memory import PersistentMemory
 from brain.prompt_builder import build_system_prompt
 from brain.stream import StreamParser
+from brain.visao import Visao
 
 # Troque o modelo sem mexer no código:  set ALICE_MODELO=qwen2.5:3b
 MODELO = os.getenv("ALICE_MODELO", "qwen2.5:7b")
@@ -50,16 +51,29 @@ class Think:
         self.clima = Clima()
         self.acoes = Acoes(notificar, self.agenda, self.dados, self.clima, llm=self._json_llm)
         self.emocoes = None  # o servidor liga o motor de emoções aqui (brain/emocoes.py)
+        # Olha a tela só quando o usuário pede. Padrão: OCR (leve). Veja brain/visao.py e o LEIAME-VISAO.md.
+        self.visao = Visao(opcoes_ollama=CARGA)
 
     # ------------------------------------------------------------------
     def stream(self, user_input):
         """Gera eventos conforme o modelo escreve (veja brain/stream.py)."""
         self.personalidade.update_from_interaction(user_input)
-        sistema = build_system_prompt(self.personalidade, self.memory.data, self.acoes.descricoes(), self.contexto())
+        contexto = self.contexto()
+        try:  # vazio se o usuario nao pediu para ela olhar a tela; um erro aqui nunca derruba a conversa
+            tela = self.visao.contexto_para(user_input)
+        except Exception as e:
+            print("Visão de tela falhou:", e)
+            tela = f"NA TELA AGORA: você NÃO conseguiu ver a tela ({str(e)[:120]}). Diga isso; não invente."
+        sistema = build_system_prompt(self.personalidade, self.memory.data, self.acoes.descricoes(), contexto)
+        historico, pergunta = self.messages, user_input
+        if tela:
+            print(f"[visão] {len(tela)} caracteres da tela entraram no prompt")
+            historico = self.messages[-2:]
+            pergunta = f"{user_input}\n\n---\n{tela}"
         msgs = [
             {"role": "system", "content": sistema},
-            *self.messages,
-            {"role": "user", "content": user_input},
+            *historico,
+            {"role": "user", "content": pergunta},
         ]
 
         parser = StreamParser()
